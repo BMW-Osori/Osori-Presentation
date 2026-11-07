@@ -1,0 +1,1014 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#000000">
+<title>Osori · 보행자 촉각 경고</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231C69D4'/%3E%3Cg fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M16 10v12M11 13v6M21 13v6M6.500 15v2M25.500 15v2'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  /* 키노트처럼 슬라이드마다 어둡거나 밝은 면이 정해져 있음. 위험도 색은 앱(ui.dart)과 같음 */
+  :root {
+    --brand: #1c69d4; --brand-on-dark: #4a90ee;
+    --ease-out: cubic-bezier(.23, 1, .32, 1);
+    --ease-drawer: cubic-bezier(.32, .72, 0, 1);
+    --bar: calc(52px + env(safe-area-inset-top, 0px));
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%; background: #000; }
+  body { margin: 0; background: #000; color: #f5f5f7; font: 17px/1.5 Pretendard, system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button, a { touch-action: manipulation; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; user-select: none; -webkit-user-select: none; }
+  :focus-visible { outline: 2px solid var(--brand-on-dark); outline-offset: 3px; border-radius: 8px; }
+  h1, h2, h3, p { margin: 0; }
+  [hidden] { display: none !important; }
+
+  /* 상단 막대: 슬라이드가 뒤로 지나가는 반투명 재질 */
+  .bar { position: fixed; inset: 0 0 auto; z-index: 1000; height: var(--bar); padding: env(safe-area-inset-top, 0px) max(20px, env(safe-area-inset-right, 0px)) 0 max(20px, env(safe-area-inset-left, 0px)); display: flex; align-items: center; justify-content: space-between; gap: 16px; background: rgb(22 22 23 / .72); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); font-size: 14px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; }
+  .logo { width: 26px; height: 26px; border-radius: 7px; background: var(--brand); display: grid; place-items: center; flex: none; }
+  .logo svg { width: 16px; height: 16px; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; fill: none; }
+  .live { display: flex; align-items: center; gap: 14px; color: #a1a1a6; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+  .live span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #6e6e73; flex: none; transition: background-color 200ms ease; }
+  .dot.on { background: #30d158; }
+  .dot.off { background: #ff453a; }
+
+  /* 슬라이드 */
+  #deck { position: fixed; inset: 0; overflow-y: auto; overscroll-behavior: none; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  .slide { position: relative; height: 100dvh; scroll-snap-align: start; scroll-snap-stop: always; padding: calc(var(--bar) + clamp(16px, 3vh, 40px)) clamp(20px, 5vw, 88px) clamp(20px, 4vh, 44px); display: flex; flex-direction: column; overflow: hidden; }
+  .dark { background: #000; color: #f5f5f7; --muted: #a1a1a6; --line: rgb(255 255 255 / .12); --surface: #1c1c1e; --accent: var(--brand-on-dark); color-scheme: dark; }
+  .light { background: #f5f5f7; color: #1d1d1f; --muted: #6e6e73; --line: rgb(0 0 0 / .09); --surface: #fff; --accent: var(--brand); color-scheme: light; }
+  .eyebrow { font-size: clamp(14px, 1.3vw, 19px); font-weight: 600; color: var(--accent); letter-spacing: -.005em; }
+  .title { font-size: clamp(32px, 5vw, 72px); line-height: 1.08; font-weight: 800; letter-spacing: -.03em; word-break: keep-all; margin-top: .25em; }
+  .lede { font-size: clamp(16px, 1.55vw, 23px); color: var(--muted); line-height: 1.45; letter-spacing: -.012em; word-break: keep-all; margin-top: .7em; max-width: 44em; }
+  .source { font-size: 13px; color: var(--muted); margin-top: auto; padding-top: 12px; }
+
+  /* 등장: 처음 볼 때 한 번만 */
+  .rise { opacity: 0; transform: translateY(18px); transition: opacity 700ms var(--ease-out), transform 700ms var(--ease-out); transition-delay: calc(var(--i, 0) * 80ms); }
+  .seen .rise { opacity: 1; transform: none; }
+
+  /* 진행 점 */
+  .dots { position: fixed; z-index: 1000; right: max(10px, env(safe-area-inset-right, 0px)); top: 50%; translate: 0 -50%; display: grid; gap: 2px; }
+  .dots button { display: block; padding: 7px 8px; }
+  .dots i { display: block; width: 7px; height: 7px; border-radius: 50%; background: #8e8e93; opacity: .55; transition: opacity 200ms ease, transform 200ms var(--ease-out); }
+  .dots [aria-current="true"] i { opacity: 1; transform: scale(1.35); background: var(--brand-on-dark); }
+
+  /* 1 표지 */
+  #hero { align-items: center; justify-content: center; text-align: center; }
+  #hero .title { font-size: clamp(42px, 7.6vw, 116px); letter-spacing: -.035em; position: relative; }
+  #hero .lede { position: relative; }
+  .rings { position: absolute; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; }
+  .rings i { position: absolute; width: 90vmin; height: 90vmin; left: -45vmin; top: -45vmin; border-radius: 50%; border: 1.5px solid var(--brand-on-dark); opacity: 0; animation: ring 4.8s var(--ease-out) infinite; }
+  .rings i:nth-child(2) { animation-delay: 1.6s; }
+  .rings i:nth-child(3) { animation-delay: 3.2s; }
+  @keyframes ring { 0% { transform: scale(.25); opacity: 0; } 18% { opacity: .5; } 100% { transform: scale(1.5); opacity: 0; } }
+  .hint { position: absolute; bottom: clamp(18px, 4vh, 40px); left: 0; right: 0; font-size: 14px; color: var(--muted); }
+  kbd { font: inherit; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--line); }
+
+  /* 2 문제 */
+  .numbers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(12px, 2vw, 28px); margin-top: clamp(16px, 4vh, 44px); }
+  .big b { display: block; font-size: clamp(38px, 6.2vw, 96px); line-height: 1.05; font-weight: 700; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+  .big > span { font-size: clamp(14px, 1.3vw, 19px); color: var(--muted); }
+  .big .unit { font-size: .42em; letter-spacing: -.01em; margin-left: .08em; }
+  .bars { display: grid; gap: clamp(8px, 1.5vh, 14px); margin-top: clamp(16px, 4vh, 44px); }
+  .bars > div { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) 13em; gap: 14px; align-items: center; font-size: clamp(14px, 1.25vw, 18px); }
+  .track { height: 14px; border-radius: 7px; background: var(--line); overflow: hidden; }
+  .fill { height: 100%; border-radius: 7px; background: var(--c, var(--accent)); transform-origin: left; transform: scaleX(0); transition: transform 900ms var(--ease-drawer) 200ms; }
+  .seen .fill { transform: scaleX(var(--v)); }
+  .bars small { color: var(--muted); font-size: 1em; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* 왜 보행 노인인가 */
+  .why-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: clamp(20px, 3.5vw, 56px); align-items: center; }
+  .why-text .title { font-size: clamp(30px, 3.9vw, 58px); }
+  .reasons { list-style: none; margin: clamp(12px, 2.5vh, 28px) 0 0; padding: 0; display: grid; gap: clamp(10px, 1.8vh, 20px); }
+  .reasons li { display: grid; grid-template-columns: clamp(92px, 10.5vw, 165px) minmax(0, 1fr); gap: 14px; align-items: start; }
+  .reasons b { font-size: clamp(24px, 2.5vw, 36px); line-height: 1.1; font-weight: 700; letter-spacing: -.03em; color: var(--accent); word-break: keep-all; }
+  .reasons b.hot { color: #ff6b5e; }
+  .reasons b.quiet { color: #f5f5f7; }
+  .reasons h3 { font-size: clamp(15px, 1.35vw, 20px); font-weight: 600; letter-spacing: -.015em; word-break: keep-all; }
+  .reasons p { font-size: clamp(13px, 1.05vw, 15.5px); color: var(--muted); line-height: 1.45; margin-top: 3px; word-break: keep-all; }
+  .scene { margin: 0; min-width: 0; }
+  .scene svg { display: block; width: 100%; height: auto; max-height: 68dvh; font-family: inherit; }
+  .vib { transform-box: fill-box; transform-origin: center; animation: vib 1.5s var(--ease-out) infinite; }
+  .vib.two { animation-delay: .5s; }
+  @keyframes vib { from { transform: scale(.45); opacity: .9; } to { transform: scale(1.6); opacity: 0; } }
+  /* 출처: 글 끝의 칩 링크 */
+  .chip-link { display: inline-block; margin-left: 2px; padding: 1px 9px; border-radius: 999px; background: rgb(127 127 127 / .2); color: inherit; font-size: 12px; font-weight: 500; line-height: 1.6; text-decoration: none; white-space: nowrap; transition: transform 100ms var(--ease-out); }
+  .chip-link::after { content: " ↗"; }
+  .chip-link:active { transform: scale(.97); }
+
+  /* 지도 공통 */
+  .leaflet-container { background: #111; font-family: inherit; }
+  .leaflet-tile-pane { filter: grayscale(1) invert(1) brightness(.72) contrast(.9); }
+  .leaflet-control-attribution { background: rgb(0 0 0 / .55) !important; color: #a1a1a6 !important; font-size: 10px !important; }
+  .leaflet-control-attribution a { color: #d1d1d6 !important; }
+  .glass { background: rgb(28 28 30 / .72); -webkit-backdrop-filter: saturate(180%) blur(24px); backdrop-filter: saturate(180%) blur(24px); border-radius: 20px; box-shadow: 0 12px 40px rgb(0 0 0 / .4), inset 0 0 0 .5px rgb(255 255 255 / .14); }
+
+  /* 3 사고다발 지도 */
+  #hotspots { padding: 0; }
+  #hotmap { position: absolute; inset: 0; }
+  #hotmap .leaflet-top { top: var(--bar); }
+  .hot-panel { position: absolute; z-index: 500; left: clamp(14px, 3vw, 44px); top: calc(var(--bar) + 16px); max-height: calc(100% - var(--bar) - 40px); width: min(390px, calc(100% - 28px)); padding: clamp(16px, 2vw, 26px); display: flex; flex-direction: column; gap: 14px; overflow-y: auto; overscroll-behavior: contain; }
+  .hot-panel .title { font-size: clamp(25px, 2.7vw, 40px); margin-top: .1em; }
+  .levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .levels div { padding: 10px 12px; border-radius: 13px; background: rgb(255 255 255 / .07); }
+  .levels b { display: block; font-size: clamp(20px, 2vw, 28px); font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .levels span { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+  .levels i { width: 8px; height: 8px; border-radius: 50%; }
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 2px; border-radius: 10px; background: rgb(255 255 255 / .1); }
+  .seg button { padding: 6px 4px; border-radius: 8px; font-size: 14px; font-weight: 500; transition: background-color 200ms ease, transform 100ms var(--ease-out); }
+  .seg button:active { transform: scale(.96); }
+  .seg button[aria-pressed="true"] { background: rgb(255 255 255 / .22); font-weight: 600; }
+  .zone-card { display: grid; gap: 10px; }
+  .zone-card h3 { font-size: 16px; font-weight: 600; line-height: 1.3; letter-spacing: -.012em; word-break: keep-all; }
+  .ring { flex: none; width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 16px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; background: radial-gradient(closest-side, rgb(44 44 46) 82%, transparent 83%), conic-gradient(var(--c) calc(var(--v) * 1%), rgb(255 255 255 / .14) 0); }
+  .zone-top { display: flex; gap: 12px; align-items: center; }
+  .facts { margin: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; text-align: center; }
+  .facts dt { font-size: 12px; color: var(--muted); }
+  .facts dd { margin: 0; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .small { font-size: 13px; color: var(--muted); word-break: keep-all; }
+
+  /* 4 동작 */
+  .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: clamp(8px, 1.2vw, 16px); margin-top: clamp(20px, 5vh, 56px); }
+  .step { background: var(--surface); border-radius: 22px; padding: clamp(14px, 1.7vw, 26px); display: flex; flex-direction: column; gap: 10px; min-height: clamp(170px, 34vh, 340px); }
+  .step .no { font-size: clamp(26px, 3vw, 46px); font-weight: 700; color: var(--accent); letter-spacing: -.03em; line-height: 1; }
+  .step h3 { font-size: clamp(16px, 1.55vw, 23px); font-weight: 600; letter-spacing: -.015em; word-break: keep-all; }
+  .step p { font-size: clamp(13px, 1.15vw, 16px); color: var(--muted); line-height: 1.45; word-break: keep-all; }
+  .step code { margin-top: auto; font: 500 12px ui-monospace, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
+
+  /* 5 실시간 시연 */
+  .demo { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(250px, 320px); gap: clamp(10px, 1.2vw, 18px); margin-top: clamp(10px, 2vh, 22px); }
+  .demo-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px 28px; flex-wrap: wrap; }
+  .demo-head .title { font-size: clamp(26px, 3.5vw, 52px); }
+  .where { display: grid; gap: 5px; justify-items: end; width: min(300px, 100%); }
+  .where .seg { width: 100%; }
+  .where .small { text-align: right; }
+  #demomap { border-radius: 22px; min-height: 240px; z-index: 0; }
+  .panel { background: var(--surface); border-radius: 22px; padding: 16px; display: flex; flex-direction: column; min-height: 0; }
+  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .kpis b { display: block; font-size: clamp(22px, 2.2vw, 32px); font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .kpis span { font-size: 12px; color: var(--muted); }
+  .feed { list-style: none; margin: 10px -6px 0; padding: 0; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; font-size: 13px; }
+  .feed li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; padding: 8px 6px; border-top: 1px solid var(--line); animation: enter 260ms var(--ease-out); }
+  .feed b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .feed small { grid-column: 1; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .lv { grid-row: 1 / 3; grid-column: 2; align-self: center; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; }
+  .lv i { width: 7px; height: 7px; border-radius: 50%; }
+  @keyframes enter { from { opacity: 0; transform: translateY(-6px); } }
+
+  /* 휴대폰 */
+  .phone-wrap { display: flex; flex-direction: column; gap: 12px; min-height: 0; align-items: center; }
+  .phone { position: relative; flex: 1; min-height: 0; width: 100%; border-radius: 38px; background: #1c1c1e; box-shadow: inset 0 0 0 2px rgb(255 255 255 / .16), 0 20px 50px rgb(0 0 0 / .55); padding: 42px 16px 16px; display: flex; flex-direction: column; gap: 8px; transition: background-color 180ms ease; overflow: hidden; }
+  .phone::before { content: ""; position: absolute; top: 12px; left: 50%; translate: -50% 0; width: 76px; height: 22px; border-radius: 12px; background: #000; }
+  .phone.CAUTION { background: #5c2f18; }
+  .phone.DANGER { background: #6d1512; }
+  .phone h3 { font-size: 21px; font-weight: 700; letter-spacing: -.02em; line-height: 1.18; word-break: keep-all; }
+  .phone p { font-size: 13px; color: #d1d1d6; line-height: 1.4; word-break: keep-all; overflow-wrap: anywhere; }
+  .phone .state { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .phone .card { margin-top: auto; padding: 10px 12px; border-radius: 15px; background: rgb(255 255 255 / .1); }
+  .fire { width: 100%; flex: none; padding: 13px 18px; border-radius: 999px; background: var(--brand); color: #fff; font-weight: 600; font-size: 16px; letter-spacing: -.01em; transition: transform 120ms var(--ease-out), opacity 120ms ease; }
+  .fire:active { transform: scale(.97); }
+
+  /* 6 채팅 */
+  .ai { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: clamp(10px, 1.4vw, 20px); margin-top: clamp(10px, 2vh, 22px); }
+  .chat { padding: 0; overflow: hidden; }
+  .msgs { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .bubble { flex: none; max-width: 90%; padding: 10px 15px; border-radius: 19px; font-size: 15px; line-height: 1.5; word-break: keep-all; overflow-wrap: anywhere; }
+  .bubble.user { align-self: flex-end; background: var(--brand); color: #fff; border-bottom-right-radius: 6px; }
+  .bubble.bot { align-self: flex-start; background: #f5f5f7; border-bottom-left-radius: 6px; max-width: 100%; }
+  .bubble.wait { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bubble h2 { font-size: 19px; margin: 2px 0 6px; letter-spacing: -.02em; }
+  .bubble h3 { font-size: 15px; margin: 12px 0 4px; }
+  .bubble p, .bubble ul, .bubble ol { margin: 5px 0; }
+  .bubble ul, .bubble ol { padding-left: 20px; }
+  .bubble blockquote { margin: 8px 0; padding: 8px 12px; background: rgb(0 0 0 / .05); border-radius: 10px; }
+  .bubble blockquote p { margin: 0; }
+  .bubble table { border-collapse: collapse; font-size: 13px; margin: 6px 0; display: block; overflow-x: auto; }
+  .bubble th, .bubble td { border-bottom: 1px solid var(--line); padding: 4px 9px; text-align: left; white-space: nowrap; }
+  .bubble hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0 6px; }
+  .bubble em { color: var(--muted); font-size: 12.5px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 0 18px 10px; }
+  .chips button { padding: 7px 13px; border-radius: 999px; background: #e8f0fb; color: var(--brand); font-size: 14px; font-weight: 500; transition: transform 100ms var(--ease-out); }
+  .chips button:active { transform: scale(.97); }
+  .chips button:disabled, .send:disabled { opacity: .45; cursor: default; }
+  .ask { display: flex; gap: 8px; padding: 0 12px 12px; }
+  .ask input { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 9px 15px; border-radius: 20px; border: 1px solid var(--line); background: #f5f5f7; color: inherit; }
+  .ask input:focus-visible { outline: 0; border-color: var(--brand); box-shadow: 0 0 0 3px #e8f0fb; }
+  .send { flex: none; width: 40px; height: 40px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 19px; font-weight: 600; transition: transform 100ms var(--ease-out); }
+  .send:active:not(:disabled) { transform: scale(.94); }
+  .context { background: #1d1d1f; color: #f5f5f7; }
+  .context h3 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .context h3.sub { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgb(255 255 255 / .12); }
+  .context pre { flex: 2; min-height: 0; overflow: auto; overscroll-behavior: contain; margin: 8px 0 0; font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; color: #d1d1d6; }
+  .log { flex: 3; min-height: 0; overflow: auto; overscroll-behavior: contain; list-style: none; margin: 8px 0 0; padding: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  .log li { padding: 3px 0; display: grid; grid-template-columns: 5.2em 11em minmax(0, 1fr) auto; gap: 8px; color: #d1d1d6; }
+  .log time { color: #8e8e93; }
+  .log .route { color: #6cb0ff; white-space: nowrap; }
+  .log .path { overflow-wrap: anywhere; }
+  .log .res { color: #30d158; white-space: nowrap; text-align: right; }
+  .log .res.bad { color: #ff453a; }
+
+  /* 데이터셋의 활용성: 가상의 내비게이션 */
+  .navi-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(250px, .6fr) minmax(0, 2fr); gap: clamp(18px, 2.6vw, 40px); }
+  .navi-text { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 10px; min-width: 0; }
+  .navi-text .title { font-size: clamp(28px, 3.4vw, 52px); }
+  .navi-text .lede { font-size: clamp(14px, 1.2vw, 18px); margin-top: .2em; }
+  .navi-points { margin: 2px 0; padding-left: 18px; font-size: clamp(13px, 1.05vw, 15.5px); line-height: 1.6; word-break: keep-all; }
+  .nav-toggle { width: auto; padding: 9px 20px; font-size: 14px; background: rgb(255 255 255 / .14); }
+  .navi { position: relative; min-height: 0; margin: 8px; border-radius: 30px; overflow: hidden; background: #111; box-shadow: 0 0 0 8px #1c1c1e, 0 30px 70px rgb(0 0 0 / .6); }
+  #navmap { position: absolute; inset: 0; z-index: 0; }
+  .car { width: 44px; height: 44px; display: grid; place-items: center; filter: drop-shadow(0 3px 7px rgb(0 0 0 / .6)); }
+  .n-turn { position: absolute; z-index: 500; left: 16px; top: 16px; display: flex; gap: 12px; align-items: center; padding: 10px 18px 10px 12px; border-radius: 18px; }
+  .n-turn b { font-size: 36px; line-height: 1; width: 42px; text-align: center; color: #4a90ee; }
+  .n-turn strong { display: block; font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .n-turn span { font-size: 13px; color: #d1d1d6; }
+  .n-alert { position: absolute; z-index: 600; right: 16px; top: 16px; width: min(370px, 56%); padding: 16px 20px; border-radius: 22px; background: #c8551b; color: #fff; box-shadow: 0 14px 40px rgb(0 0 0 / .5); opacity: 0; transform: translateY(-14px) scale(.98); pointer-events: none; transition: opacity 160ms ease, transform 160ms ease, background-color 200ms ease; }
+  .n-alert.on { opacity: 1; transform: none; transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out), background-color 200ms ease; }
+  .n-alert.HIGH { background: #b3261e; }
+  .n-kicker { font-size: 13px; font-weight: 600; }
+  .n-big { font-size: clamp(28px, 2.9vw, 42px); font-weight: 800; letter-spacing: -.03em; line-height: 1.12; font-variant-numeric: tabular-nums; }
+  .n-name { font-size: 17px; font-weight: 600; letter-spacing: -.015em; margin-top: 2px; word-break: keep-all; }
+  .n-info { font-size: 13px; line-height: 1.45; opacity: .92; word-break: keep-all; }
+  .n-act { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgb(255 255 255 / .3); font-size: 15px; font-weight: 600; word-break: keep-all; }
+  .n-bar { position: absolute; z-index: 500; left: 16px; right: 16px; bottom: 24px; display: flex; align-items: center; gap: 20px; padding: 10px 20px; border-radius: 20px; }
+  .n-speed { display: flex; align-items: baseline; gap: 5px; }
+  .n-speed b { font-size: 34px; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; min-width: 1.3em; text-align: right; }
+  .n-speed span { font-size: 13px; color: #d1d1d6; }
+  .n-trip { min-width: 0; display: grid; }
+  .n-trip b { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .n-trip span { display: flex; align-items: center; gap: 6px; font: 12px ui-monospace, Menlo, monospace; color: #d1d1d6; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+  /* 7 마무리 */
+  #close { justify-content: center; }
+  .stack { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(8px, 1.2vw, 16px); margin-top: clamp(20px, 5vh, 52px); }
+  .stack div { background: var(--surface); border-radius: 20px; padding: clamp(14px, 1.6vw, 22px); }
+  .stack b { display: block; font-size: clamp(15px, 1.4vw, 20px); font-weight: 600; letter-spacing: -.012em; }
+  .stack span { font-size: clamp(13px, 1.05vw, 15px); color: var(--muted); }
+  .credits { margin-top: clamp(16px, 4vh, 40px); font-size: 13px; color: var(--muted); line-height: 1.7; word-break: keep-all; }
+
+  @media (hover: hover) and (pointer: fine) {
+    .fire:hover, .send:hover:not(:disabled) { opacity: .88; }
+    .chips button:hover:not(:disabled) { background: #dbe8f9; }
+    .seg button:hover { background: rgb(255 255 255 / .14); }
+    .dots button:hover i { opacity: 1; }
+    .chip-link:hover { background: rgb(127 127 127 / .36); }
+  }
+  /* 좁거나 낮은 화면: 슬라이드 높이를 내용에 맞추고 자유롭게 스크롤 */
+  @media (max-width: 960px), (max-height: 620px) {
+    #deck { scroll-snap-type: y proximity; }
+    .slide { height: auto; min-height: 100svh; overflow: visible; scroll-snap-stop: normal; }
+    #hotspots { height: 100svh; overflow: hidden; }
+    .numbers, .flow, .why-grid, .navi-grid { grid-template-columns: minmax(0, 1fr); }
+    .navi { height: 68svh; }
+    .n-alert { top: 84px; left: 12px; right: 12px; width: auto; }
+    .where { justify-items: start; }
+    .where .small { text-align: left; }
+    .step { min-height: 0; }
+    .demo, .ai { grid-template-columns: minmax(0, 1fr); }
+    #demomap { height: 46svh; }
+    .phone { flex: none; height: 300px; }
+    .feed { max-height: 300px; }
+    .msgs { min-height: 300px; max-height: 60svh; }
+    .context pre, .log { max-height: 300px; }
+    .log li { grid-template-columns: 5.2em minmax(0, 1fr) auto; }
+    .log .route { grid-column: 2 / -1; }
+    .stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .bars > div { grid-template-columns: 6.5em minmax(0, 1fr); }
+    .bars small { grid-column: 1 / -1; text-align: left; margin-top: -6px; }
+    .live .opt { display: none; }
+    .dots { display: none; }
+    .hot-panel { top: auto; bottom: 12px; max-height: 52svh; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #deck { scroll-behavior: auto; }
+    .rings { display: none; }
+    .vib { animation: none; opacity: .6; transform: none; }
+    .rise { transform: none; transition: opacity 200ms ease; transition-delay: 0ms; }
+    .fill { transition: none; }
+    .feed li { animation: none; }
+    .fire:active, .send:active:not(:disabled), .chips button:active, .seg button:active, .chip-link:active { transform: none; }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .bar { background: #161617; -webkit-backdrop-filter: none; backdrop-filter: none; }
+    .glass { background: #1c1c1e; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  }
+  @media (prefers-contrast: more) {
+    .dark { --muted: #d1d1d6; }
+    .light { --muted: #3a3a3c; }
+    .glass, .panel, .step { outline: 1px solid currentColor; }
+  }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><div class="logo"><svg viewBox="0 0 24 24"><path d="M12 6v12M7.500 9v6M16.500 9v6M3 11v2M21 11v2"/></svg></div>Osori</div>
+  <div class="live">
+    <span><i class="dot" id="st-backend"></i><span id="st-backend-t">백엔드</span></span>
+    <span class="opt"><i class="dot" id="st-llm"></i>AI 모델</span>
+    <span class="opt" id="st-events"></span>
+  </div>
+</header>
+<nav class="dots" id="dots" aria-label="슬라이드"></nav>
+
+<main id="deck">
+  <section class="slide dark" id="hero" data-title="표지">
+    <div class="rings" aria-hidden="true"><i></i><i></i><i></i></div>
+    <p class="eyebrow rise">BMW Young Innovation</p>
+    <h1 class="title rise" style="--i:1">들리지 않는 차를,<br>느끼게 합니다.</h1>
+    <p class="lede rise" style="--i:2">저소음 차량이 다가오면 보행자의 몸에 진동으로 알리는 촉각 경고 시스템</p>
+    <p class="hint rise" style="--i:4"><kbd>↓</kbd> 다음 &nbsp; <kbd>↑</kbd> 이전 &nbsp; <kbd>F</kbd> 전체 화면</p>
+  </section>
+
+  <section class="slide light" id="problem" data-title="문제">
+    <p class="eyebrow rise">문제</p>
+    <h2 class="title rise" style="--i:1">사고는 특정한 곳에<br>몰립니다.</h2>
+    <div class="numbers">
+      <div class="big rise" style="--i:2"><b><span data-count="areas">0</span><span class="unit">건</span></b><span>연도·유형별 사고다발지역 지정</span></div>
+      <div class="big rise" style="--i:3"><b><span data-count="casualties">0</span><span class="unit">명</span></b><span>그 지역에서 나온 사상자</span></div>
+      <div class="big rise" style="--i:4"><b><span id="elder-share">0</span><span class="unit">%</span></b><span>이 집계의 사망자 중 보행 노인</span></div>
+    </div>
+    <div class="bars rise" style="--i:5" id="type-bars"></div>
+    <p class="source" id="problem-source"></p>
+  </section>
+
+  <section class="slide dark" id="why" data-title="왜 노인과 스몸비인가">
+    <div class="why-grid">
+      <div class="why-text">
+        <p class="eyebrow rise">왜 보행 노인과 스몸비인가</p>
+        <h2 class="title rise" style="--i:1">소리로 피하던 위험이,<br>소리 없이 다가옵니다.</h2>
+        <ol class="reasons">
+          <li class="rise" style="--i:2"><b class="quiet">저소음</b><div><h3>전기차는 다가와도 잘 들리지 않습니다</h3><p>모터로 구동되는 전기차는 내연기관차보다 소리가 작아, 보행자가 다가오는 차를 알아채지 못하는 경우가 종종 생깁니다. <a class="chip-link" href="https://koreascience.kr/article/JAKO201730537147984.page?lang=ko" target="_blank" rel="noopener">대한기계학회논문집 2017</a></p></div></li>
+          <li class="rise" style="--i:3"><b class="hot">67%</b><div><h3>보행 사망자 3명 중 2명은 노인입니다</h3><p>2024년 보행 사망자 920명 중 616명이 65세 이상이고, 346명은 길을 건너다 숨졌습니다. <a class="chip-link" href="https://v.daum.net/v/20250929010347791" target="_blank" rel="noopener">한국교통안전공단 · 중앙일보</a></p></div></li>
+          <li class="rise" style="--i:4"><b>52.9%</b><div><h3>노인에게는 차 소리가 더 작게 들립니다</h3><p>70대 이상 남성의 52.9%, 여성의 40.7%가 중증도 이상 난청입니다. <a class="chip-link" href="https://www.hankyung.com/article/2025051927037" target="_blank" rel="noopener">질병관리청 · 한국경제</a></p></div></li>
+          <li class="rise" style="--i:5"><b>5.5m</b><div><h3>스몸비는 스스로 귀와 눈을 닫고 걷습니다</h3><p>소리를 알아채는 거리가 평소 14.4m에서 문자할 때 7.2m, 음악 들을 때 5.5m로 줄고, 시야 폭은 56% 좁아집니다. <a class="chip-link" href="https://www.kukinews.com/article/view/kuk202307070156" target="_blank" rel="noopener">현대해상 연구소 · 쿠키뉴스</a></p><p>2014–2016년 보행 중 주의분산 사고 사상자 1,791명 중 61.7%가 휴대전화 사용 중이었습니다. <a class="chip-link" href="https://mediahub.seoul.go.kr/archives/1158467" target="_blank" rel="noopener">삼성교통안전문화연구소 · 내 손안에 서울</a></p></div></li>
+        </ol>
+      </div>
+      <figure class="scene rise" style="--i:3">
+        <svg viewBox="0 0 640 400" role="img" aria-label="엔진 소리 없이 다가오는 전기차와, 등을 돌린 채 길을 건너는 보행 노인과 스마트폰을 보는 보행자. 두 사람의 손목 기기가 진동으로 차량 접근을 알립니다.">
+          <rect width="640" height="400" rx="26" fill="#1c1c1e"/>
+          <rect y="238" width="640" height="122" fill="#2c2c2e"/>
+          <rect y="232" width="640" height="6" fill="#48484a"/>
+          <rect y="360" width="640" height="6" fill="#48484a"/>
+          <g fill="#636366"><rect x="396" y="244" width="216" height="12" rx="2"/><rect x="396" y="268" width="216" height="12" rx="2"/><rect x="396" y="292" width="216" height="12" rx="2"/><rect x="396" y="316" width="216" height="12" rx="2"/><rect x="396" y="340" width="216" height="12" rx="2"/></g>
+          <g transform="translate(14 256) scale(.9)">
+            <path d="M0 58Q0 40 18 36L62 30Q90 4 130 4H170Q200 4 222 30L250 36Q268 40 268 58V70Q268 76 262 76H6Q0 76 0 70Z" fill="#8e8e93"/>
+            <path d="M76 30Q96 12 130 12H148V30ZM156 12H170Q192 12 208 30H156Z" fill="#1c1c1e"/>
+            <ellipse cx="262" cy="50" rx="6" ry="4" fill="#fff"/>
+            <circle cx="60" cy="76" r="20" fill="#0a0a0a" stroke="#636366" stroke-width="3"/>
+            <circle cx="208" cy="76" r="20" fill="#0a0a0a" stroke="#636366" stroke-width="3"/>
+          </g>
+          <g fill="none" stroke="#a1a1a6" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 9">
+            <path d="M280 268a42 42 0 0 1 0 52"/><path d="M302 256a64 64 0 0 1 0 76" opacity=".55"/><path d="M324 246a86 86 0 0 1 0 96" opacity=".25"/>
+          </g>
+          <text x="134" y="226" text-anchor="middle" fill="#d1d1d6" font-size="19" font-weight="600">엔진 소리 거의 없음</text>
+          <g fill="#f5f5f7">
+            <circle cx="440" cy="148" r="18"/>
+            <path d="M421 174Q440 160 460 175L466 246H424Z"/>
+            <rect x="425" y="242" width="16" height="76" rx="8"/>
+            <rect x="449" y="242" width="16" height="76" rx="8"/>
+          </g>
+          <path d="M458 182L476 206L488 180" fill="none" stroke="#f5f5f7" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="482" y="152" width="15" height="27" rx="3" fill="#6cb0ff"/>
+          <circle cx="456" cy="147" r="5" fill="#ff6b5e"/>
+          <rect x="467" y="197" width="18" height="13" rx="4" fill="#4a90ee"/>
+          <g fill="#f5f5f7">
+            <circle cx="548" cy="148" r="18"/>
+            <path d="M529 176Q548 162 570 178L576 248H532Z"/>
+            <rect x="534" y="244" width="16" height="74" rx="8"/>
+            <rect x="558" y="244" width="16" height="74" rx="8"/>
+          </g>
+          <path d="M570 184L596 226" stroke="#f5f5f7" stroke-width="12" stroke-linecap="round"/>
+          <path d="M599 226L610 318" stroke="#d1d1d6" stroke-width="5" stroke-linecap="round"/>
+          <rect x="587" y="214" width="19" height="13" rx="4" fill="#4a90ee"/>
+          <g fill="none" stroke="#4a90ee" stroke-width="3">
+            <circle class="vib" cx="476" cy="204" r="19"/><circle class="vib two" cx="476" cy="204" r="19"/>
+            <circle class="vib" cx="596" cy="220" r="19"/><circle class="vib two" cx="596" cy="220" r="19"/>
+          </g>
+          <text x="446" y="116" text-anchor="middle" fill="#f5f5f7" font-size="18" font-weight="600">스몸비</text>
+          <text x="556" y="116" text-anchor="middle" fill="#f5f5f7" font-size="18" font-weight="600">보행 노인</text>
+          <text x="320" y="56" text-anchor="middle" fill="#f5f5f7" font-size="26" font-weight="700" letter-spacing="-.5">들리지 않아도, 손목으로 느낍니다</text>
+          <text x="320" y="388" text-anchor="middle" fill="#8e8e93" font-size="13">설명용 일러스트</text>
+        </svg>
+      </figure>
+    </div>
+  </section>
+
+  <section class="slide dark" id="hotspots" data-title="사고다발 지도">
+    <div id="hotmap" aria-label="전국 사고다발지역 지도"></div>
+    <aside class="hot-panel glass">
+      <div>
+        <p class="eyebrow">사고다발지역</p>
+        <h2 class="title"><span id="hot-count">–</span>곳을<br>지도 위에.</h2>
+      </div>
+      <p class="small">최근 3년 보행·자전거 사고다발지역. 사상자를 사망 사고 기준으로 환산해 0–100점으로 나타냈습니다. 백엔드에서 실시간으로 읽습니다. <a class="chip-link" href="https://www.data.go.kr/data/15029185/standard.do" target="_blank" rel="noopener">한국도로교통공단 · 공공데이터포털</a></p>
+      <div class="levels" id="hot-levels"></div>
+      <div class="seg" id="hot-views" role="group" aria-label="지도 범위">
+        <button data-view="korea" aria-pressed="true">전국</button><button data-view="seoul" aria-pressed="false">서울</button><button data-view="seongnam" aria-pressed="false">성남</button>
+      </div>
+      <div class="zone-card" id="zone-card" aria-live="polite"><p class="small">지도의 점을 누르면 사고 내역을 볼 수 있습니다.</p></div>
+    </aside>
+  </section>
+
+  <section class="slide light" id="how" data-title="동작 방식">
+    <p class="eyebrow rise">동작 방식</p>
+    <h2 class="title rise" style="--i:1">감지부터 진동까지,<br>서버를 거치지 않습니다.</h2>
+    <div class="flow">
+      <div class="step rise" style="--i:2"><span class="no">1</span><h3>차량 신호 감지</h3><p>보행자 디바이스가 차량 신호의 세기(RSSI)로 거리를 추정합니다.</p></div>
+      <div class="step rise" style="--i:3"><span class="no">2</span><h3>즉시 진동</h3><p>연속으로 감지되면 디바이스가 바로 진동합니다. 네트워크가 끊겨도 동작합니다.</p></div>
+      <div class="step rise" style="--i:4"><span class="no">3</span><h3>앱이 기록</h3><p>블루투스로 받은 감지 결과에 현재 위치를 붙여 백엔드로 보냅니다.</p><code>POST /api/v1/proximity-events</code></div>
+      <div class="step rise" style="--i:5"><span class="no">4</span><h3>사고다발지역과 결합</h3><p>감지 위치를 공공데이터 사고다발지역과 맞춰 위험도를 알려 줍니다.</p><code>GET /api/v1/safety-summary</code></div>
+      <div class="step rise" style="--i:6"><span class="no">5</span><h3>AI가 설명</h3><p>백엔드의 최신 데이터를 근거로 튜닝한 모델이 위험과 대처법을 답합니다.</p><code>POST /api/chat</code></div>
+    </div>
+  </section>
+
+  <section class="slide dark" id="live" data-title="실시간 시연">
+    <div class="demo-head">
+      <div>
+        <p class="eyebrow">실시간 시연</p>
+        <h2 class="title">버튼을 누르면 실제 백엔드에 저장됩니다.</h2>
+      </div>
+      <div class="where">
+        <div class="seg" id="where" role="group" aria-label="시연 위치"><button data-where="demo" aria-pressed="true">모란시장</button><button data-where="gps" aria-pressed="false">내 위치</button></div>
+        <p class="small" id="where-note" aria-live="polite">앱의 테스트 경고도 여기에 바로 나타납니다</p>
+      </div>
+    </div>
+    <div class="demo">
+      <div id="demomap" aria-label="실시간 접근 이벤트 지도"></div>
+      <div class="phone-wrap">
+        <div class="phone" id="phone" aria-live="polite">
+          <p class="state" id="ph-state">대기 중</p>
+          <h3 id="ph-title">차량 신호를 기다리고 있습니다</h3>
+          <p id="ph-text">디바이스가 저소음 차량을 감지하면 진동합니다.</p>
+          <div class="card"><p id="ph-zone">주변 사고다발지역을 확인합니다.</p></div>
+        </div>
+        <button class="fire" id="fire">차량 접근 시뮬레이션</button>
+      </div>
+      <div class="panel">
+        <div class="kpis">
+          <div><b id="k-total">–</b><span>접근 이벤트</span></div>
+          <div><b id="k-danger">–</b><span>DANGER</span></div>
+          <div><b id="k-burst">–</b><span>동시 다발</span></div>
+        </div>
+        <ul class="feed" id="feed"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide light" id="ai" data-title="AI 채팅">
+    <div class="demo-head">
+      <div>
+        <p class="eyebrow">AI 채팅</p>
+        <h2 class="title">방금 들어온 데이터로 답합니다.</h2>
+      </div>
+      <p class="small">Improved using Qwen · Qwen2.5-3B 튜닝 모델 · CPU 서버에서 실행</p>
+    </div>
+    <div class="ai">
+      <div class="panel chat">
+        <div class="msgs" id="msgs" aria-live="polite"></div>
+        <div class="chips" id="chips"></div>
+        <form class="ask" id="ask">
+          <input id="q" placeholder="예) 모란시장 위험해?" aria-label="질문" enterkeyhint="send" autocomplete="off">
+          <button class="send" id="send" aria-label="보내기">↑</button>
+        </form>
+      </div>
+      <div class="panel context">
+        <h3>통신 콘솔</h3>
+        <ol class="log" id="log" aria-label="통신 기록"></ol>
+        <h3 class="sub">모델이 받은 실시간 데이터</h3>
+        <pre id="context">질문을 보내면 백엔드에서 읽은 그대로 여기에 표시합니다.</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide dark" id="navi" data-title="데이터셋의 활용성">
+    <div class="navi-grid">
+      <div class="navi-text">
+        <p class="eyebrow rise">데이터셋의 활용성</p>
+        <h2 class="title rise" style="--i:1">같은 데이터로,<br>운전자에게도<br>알립니다.</h2>
+        <p class="lede rise" style="--i:2">보행자에게 진동으로 알리던 사고다발지역을 내비게이션에 연결하면, 운전자는 위험 구간에 들어서기 전에 속도를 줄일 수 있습니다.</p>
+        <ul class="navi-points rise" style="--i:3">
+          <li>주행 위치 주변 구역을 백엔드에서 실시간 조회</li>
+          <li>경로 앞 300m 안의 MEDIUM·HIGH 구역만 경고</li>
+          <li>최근 24시간 보행자 접근 감지까지 함께 표시</li>
+        </ul>
+        <p class="small rise" style="--i:4">가상의 내비게이션 디자인입니다. 차량 이동은 빠르게 재생한 예시이고, 구역과 감지 기록은 실제 백엔드 값입니다. <a class="chip-link" href="https://www.data.go.kr/data/15029185/standard.do" target="_blank" rel="noopener">한국도로교통공단 · 공공데이터포털</a></p>
+        <button class="fire nav-toggle rise" id="nav-toggle" style="--i:5">일시정지</button>
+      </div>
+      <div class="navi rise" style="--i:2" role="img" aria-label="가상의 내비게이션 화면. 경로 앞 사고다발지역을 경고합니다.">
+        <div id="navmap"></div>
+        <div class="n-turn glass"><b id="n-icon">↑</b><div><strong id="n-dist">–</strong><span id="n-road">경로 안내</span></div></div>
+        <div class="n-alert" id="n-alert" aria-live="polite">
+          <p class="n-kicker">⚠ 사고다발지역</p>
+          <p class="n-big" id="na-dist"></p>
+          <p class="n-name" id="na-name"></p>
+          <p class="n-info" id="na-info"></p>
+          <p class="n-info" id="na-live"></p>
+          <p class="n-act" id="na-act"></p>
+        </div>
+        <div class="n-bar glass">
+          <div class="n-speed"><b id="n-speed">0</b><span>km/h</span></div>
+          <div class="n-trip"><b id="n-left">–</b><span id="n-api"><i class="dot" id="n-dot"></i>백엔드 연결 중</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide light" id="close" data-title="정리">
+    <p class="eyebrow rise">정리</p>
+    <h2 class="title rise" style="--i:1">위험한 곳을 알고,<br>다가오는 차를 느낍니다.</h2>
+    <div class="stack">
+      <div class="rise" style="--i:2"><b>디바이스 · 앱</b><span>진동 경고, 위치 기록</span></div>
+      <div class="rise" style="--i:3"><b>Osori 백엔드</b><span>Spring Boot, PostgreSQL</span></div>
+      <div class="rise" style="--i:4"><b>공공데이터</b><span>전국교통사고다발지역 표준데이터</span></div>
+      <div class="rise" style="--i:5"><b>AI 서비스</b><span>실시간 조회 + Qwen2.5-3B 튜닝 모델</span></div>
+    </div>
+    <p class="credits rise" style="--i:6" id="credits"></p>
+  </section>
+</main>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const fmt = n => Number(n).toLocaleString('ko-KR');
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const coarse = matchMedia('(pointer: coarse)').matches;
+const LEVEL = { LOW: '#f4a07e', MEDIUM: '#e0492f', HIGH: '#c9302c', SAFE: '#8e8e93', CAUTION: '#f4a07e', DANGER: '#ff453a', RELEASED: '#4a90ee' };
+const RAMP = [[0, '#fde4d8'], [35, '#f4a07e'], [70, '#e0492f'], [100, '#c9302c']];
+const DEVICE = 1; // deploy/seed_backend.py 가 만드는 시연 디바이스
+const CENTER = [37.4301, 127.1300]; // 기본 시연 위치: 성남 모란시장
+const NEAR_M = 1000; // 주변으로 보는 거리 (server.py NEAR_M 과 같음)
+let here = CENTER, gps = false; // 시연 위치. '내 위치'를 누르면 브라우저 위치로 바뀌고 이벤트·채팅·안전 요약이 모두 따라감
+const VIEWS = { korea: [[36.3, 127.9], 7], seoul: [[37.55, 127.0], 11], seongnam: [[37.42, 127.13], 12] };
+
+// 백엔드 응답은 {success, code, message, data}, AI 서비스는 그대로
+async function api(path, body, quiet) {
+  const started = performance.now();
+  const res = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+  const json = await res.json().catch(() => ({}));
+  if (!quiet) logLine(`브라우저 → ${path.startsWith('/api/v1/') ? '백엔드' : 'AI 서비스'}`, `${body ? 'POST' : 'GET'} ${path}`, `${res.status} · ${Math.round(performance.now() - started)}ms`, !res.ok);
+  if (!res.ok) throw new Error(json.message || json.error || `${res.status}`);
+  return 'success' in json ? json.data : json;
+}
+// 통신 콘솔: 이 화면과 서버가 실제로 주고받은 요청을 그대로 표시. 2초 폴링은 새 이벤트가 있을 때만
+function logLine(route, path, result = '', bad = false) {
+  const box = document.getElementById('log'), follow = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const li = document.createElement('li');
+  li.innerHTML = `<time>${new Date().toTimeString().slice(0, 8)}</time><span class="route">${esc(route)}</span><span class="path">${esc(path)}</span><span class="res${bad ? ' bad' : ''}">${esc(result)}</span>`;
+  box.append(li);
+  while (box.children.length > 200) box.firstElementChild.remove();
+  if (follow) box.scrollTop = box.scrollHeight;
+}
+function riskColor(s) {
+  s = Math.min(100, Math.max(0, +s || 0));
+  const i = Math.max(1, RAMP.findIndex(([v]) => v >= s));
+  const [[a, ca], [b, cb]] = [RAMP[i - 1], RAMP[i]];
+  const rgb = h => [1, 3, 5].map(k => parseInt(h.slice(k, k + 2), 16));
+  const [x, y] = [rgb(ca), rgb(cb)], t = (s - a) / (b - a || 1);
+  return `rgb(${x.map((v, k) => Math.round(v + (y[k] - v) * t)).join(',')})`;
+}
+const dist = (aLat, aLng, bLat, bLng) => {
+  const r = Math.PI / 180, dLat = (bLat - aLat) * r, dLng = (bLng - aLng) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * r) * Math.cos(bLat * r) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+};
+const shortName = name => name.replace(/^\S+\s/, ''); // 시·도 생략
+const kst = ms => new Date(ms + 9 * 3600e3).toISOString().slice(0, 19); // 서버 시간대(KST)와 맞춤. 발표 노트북 시간대와 무관
+
+/* ---------- 슬라이드 이동 ---------- */
+const deck = $('deck'), slides = [...document.querySelectorAll('.slide')];
+let current = 0;
+$('dots').innerHTML = slides.map((s, i) => `<button data-i="${i}" aria-label="${s.dataset.title}" title="${s.dataset.title}"><i></i></button>`).join('');
+const go = i => slides[Math.max(0, Math.min(slides.length - 1, i))].scrollIntoView();
+$('dots').onclick = e => { const b = e.target.closest('button'); if (b) go(+b.dataset.i); };
+addEventListener('keydown', e => {
+  if (e.target.matches('input, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (['ArrowDown', 'ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); go(current + 1); }
+  else if (['ArrowUp', 'ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); go(current - 1); }
+  else if (e.key === 'Home') { e.preventDefault(); go(0); }
+  else if (e.key === 'End') { e.preventDefault(); go(slides.length - 1); }
+  else if (e.key.toLowerCase() === 'f') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.(); }
+});
+const enter = { problem: countUp, hotspots: () => hotMap.invalidateSize(), live: () => demoMap.invalidateSize(), navi: () => { navMap.invalidateSize(); navStart(); } };
+const observer = new IntersectionObserver(entries => {
+  for (const en of entries) {
+    if (!en.isIntersecting) continue;
+    current = slides.indexOf(en.target);
+    en.target.classList.add('seen');
+    enter[en.target.id]?.();
+    [...$('dots').children].forEach((b, i) => b.setAttribute('aria-current', i === current));
+    history_.replaceState(null, '', '#' + en.target.id);
+  }
+}, { root: deck, threshold: .55 });
+const history_ = window.history;
+
+/* ---------- 공공데이터 통계 ---------- */
+let stats, details = {};
+const counted = new Set();
+function countUp() {
+  if (!stats) return;
+  document.querySelectorAll('[data-count]').forEach(el => animateNumber(el, stats.total[el.dataset.count]));
+  animateNumber($('elder-share'), Math.round(stats.types['보행노인'].deaths / stats.total.deaths * 100));
+}
+function animateNumber(el, to) {
+  if (counted.has(el)) return;
+  counted.add(el);
+  if (reduced) { el.textContent = fmt(to); return; }
+  const start = performance.now(), run = 1100;
+  (function frame(t) {
+    const k = Math.min(1, (t - start) / run);
+    el.textContent = fmt(Math.round(to * (1 - (1 - k) ** 3)));
+    if (k < 1) requestAnimationFrame(frame);
+  })(start);
+}
+const LABEL = { '보행노인': '보행 노인', '자전거': '자전거', '보행어린이': '보행 어린이', '스쿨존어린이': '스쿨존 어린이' };
+async function loadAccidents() {
+  const data = await (await fetch('/accident_data.json')).json();
+  stats = data.stats; details = data.zones;
+  const types = Object.entries(stats.types).sort((a, b) => b[1].casualties - a[1].casualties);
+  const top = types[0][1].casualties;
+  $('type-bars').innerHTML = types.map(([k, v]) => `<div><span>${LABEL[k] ?? esc(k)}</span>
+    <div class="track"><div class="fill" style="--v:${v.casualties / top}; --c:${k === '보행노인' ? '#e0492f' : 'var(--accent)'}"></div></div>
+    <small>사상자 ${fmt(v.casualties)}명 · 사망 ${fmt(v.deaths)}명</small></div>`).join('');
+  const years = Object.keys(stats.years);
+  $('problem-source').innerHTML = `${years[0]}–${years.at(-1)}년, 기준일 ${esc(stats.referenceDate)}. 보행 노인·보행 어린이·스쿨존 어린이·자전거 유형의 사고다발지역만 집계한 수치입니다. <a class="chip-link" href="https://www.data.go.kr/data/15029185/standard.do" target="_blank" rel="noopener">${esc(stats.provider)} · 공공데이터포털</a>`;
+  $('credits').innerHTML = `<a class="chip-link" href="https://www.data.go.kr/data/15029185/standard.do" target="_blank" rel="noopener">사고 데이터: ${esc(stats.provider)} · 공공데이터포털</a> <a class="chip-link" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">지도 © OpenStreetMap contributors</a> <a class="chip-link" href="https://github.com/orioncactus/pretendard" target="_blank" rel="noopener">글꼴 Pretendard</a> <span>Improved using Qwen</span>`;
+  if (slides[current].id === 'problem') countUp();
+}
+
+/* ---------- 지도 ---------- */
+const baseMap = (el, center, zoom, controls = !coarse) => {
+  const map = L.map(el, { zoomControl: false, scrollWheelZoom: false, dragging: !coarse, zoomAnimation: !reduced, fadeAnimation: !reduced, markerZoomAnimation: !reduced, preferCanvas: true }).setView(center, zoom);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors', maxZoom: 19 }).addTo(map);
+  if (controls) L.control.zoom({ position: 'topright' }).addTo(map);
+  return map;
+};
+const fly = (map, center, zoom) => reduced ? map.setView(center, zoom, { animate: false }) : map.flyTo(center, zoom, { duration: .9 });
+const hotMap = baseMap('hotmap', ...VIEWS.korea);
+const demoMap = baseMap('demomap', CENTER, 14);
+const hotLayer = L.layerGroup().addTo(hotMap), demoZones = L.layerGroup().addTo(demoMap), demoEvents = L.layerGroup().addTo(demoMap), youLayer = L.layerGroup().addTo(demoMap);
+let zones = [], hotMarkers = [];
+
+// 낮은 배율에서는 점으로, 높은 배율에서는 실제 구역 반경으로
+const pixels = (map, z) => {
+  const mpp = 40075016 * Math.cos(z.latitude * Math.PI / 180) / 2 ** (map.getZoom() + 8);
+  return Math.max(2.5 + z.riskScore / 28, z.radius / mpp);
+};
+hotMap.on('zoomend', () => hotMarkers.forEach(([m, z]) => m.setRadius(pixels(hotMap, z))));
+function zoneCard(z) {
+  const d = details[z.name];
+  $('zone-card').innerHTML = `<div class="zone-top"><span class="ring" style="--c:${riskColor(z.riskScore)}; --v:${z.riskScore}">${z.riskScore}</span>
+      <div><h3>${esc(z.name)}</h3><span class="small">${esc(z.riskLevel)}${d ? ' · ' + esc(d.types.map(t => LABEL[t] ?? t).join(', ')) : ''}</span></div></div>
+    ${d ? `<dl class="facts"><div><dt>사고</dt><dd>${z.accidentCount}</dd></div><div><dt>사망</dt><dd>${d.deaths}</dd></div><div><dt>중상</dt><dd>${d.severe}</dd></div><div><dt>경상</dt><dd>${d.minor}</dd></div></dl>` : ''}`;
+}
+async function loadZones() {
+  zones = (await api('/api/v1/risk-zones?latitude=36.5&longitude=127.8&radius=1000000')).riskZones.sort((a, b) => a.riskScore - b.riskScore);
+  $('hot-count').textContent = fmt(zones.length);
+  const n = l => zones.filter(z => z.riskLevel === l).length;
+  $('hot-levels').innerHTML = ['HIGH', 'MEDIUM', 'LOW'].map(l => `<div><b>${fmt(n(l))}</b><span><i style="background:${LEVEL[l]}"></i>${l}</span></div>`).join('');
+  hotLayer.clearLayers();
+  hotMarkers = zones.map(z => [L.circleMarker([z.latitude, z.longitude], { radius: pixels(hotMap, z), stroke: false, fillColor: riskColor(z.riskScore), fillOpacity: .85 }).on('click', () => zoneCard(z)).addTo(hotLayer), z]);
+  drawDemoZones();
+  zoneCard(zones.at(-1));
+  showSummary(here);
+}
+function drawDemoZones() {
+  demoZones.clearLayers();
+  for (const z of zones.filter(z => dist(here[0], here[1], z.latitude, z.longitude) < 15000)) {
+    L.circle([z.latitude, z.longitude], { radius: z.radius, weight: 1.5, color: riskColor(z.riskScore), fillColor: riskColor(z.riskScore), fillOpacity: .28 }).bindTooltip(esc(shortName(z.name))).addTo(demoZones);
+  }
+}
+// 주변 위험구역은 백엔드 안전 요약 API 의 계산 결과를 그대로 표시
+async function showSummary([latitude, longitude]) {
+  try {
+    const s = await api(`/api/v1/safety-summary?deviceId=${DEVICE}&latitude=${latitude}&longitude=${longitude}&radius=${NEAR_M}`);
+    const top = [...s.nearbyRiskZones].sort((a, b) => b.riskScore - a.riskScore)[0];
+    $('ph-zone').textContent = top
+      ? `주변 1km 사고다발지역 ${s.nearbyRiskZoneCount}곳 · 가장 위험한 곳 ${shortName(top.name)} ${top.riskScore}점(${top.riskLevel})`
+      : '주변 1km 안에 사고다발지역이 없습니다.';
+    return s;
+  } catch {
+    $('ph-zone').textContent = '주변 사고다발지역을 읽지 못했습니다.';
+  }
+}
+async function setWhere(point, isGps) {
+  here = point; gps = isGps; presses = 0;
+  for (const b of $('where').children) b.setAttribute('aria-pressed', (b.dataset.where === 'gps') === isGps);
+  youLayer.clearLayers();
+  if (isGps) {
+    L.circle(point, { radius: NEAR_M, color: '#4a90ee', weight: 1.5, opacity: .7, fillOpacity: .06, interactive: false }).addTo(youLayer);
+    L.circleMarker(point, { radius: 7, color: '#fff', weight: 3, fillColor: '#4a90ee', fillOpacity: 1 }).bindTooltip('내 위치').addTo(youLayer);
+  }
+  fly(demoMap, point, 14);
+  drawDemoZones();
+  const s = await showSummary(point);
+  $('where-note').textContent = isGps ? `내 위치 기준 · 주변 1km ${s?.nearbyRiskZoneCount ?? 0}곳 · 시뮬레이션하면 이 위치가 저장됩니다` : '앱의 테스트 경고도 여기에 바로 나타납니다';
+}
+$('where').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.where === 'demo') return setWhere(CENTER, false);
+  if (!navigator.geolocation) { $('where-note').textContent = '이 브라우저는 위치를 지원하지 않습니다'; return; }
+  $('where-note').textContent = '위치를 확인하는 중';
+  navigator.geolocation.getCurrentPosition(
+    p => setWhere([p.coords.latitude, p.coords.longitude], true),
+    err => { $('where-note').textContent = err.code === err.PERMISSION_DENIED ? '위치 권한이 없어 모란시장 기준으로 시연합니다' : '위치를 확인하지 못해 모란시장 기준으로 시연합니다'; },
+    { timeout: 8000, maximumAge: 30000, enableHighAccuracy: true });
+};
+$('hot-views').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  for (const x of $('hot-views').children) x.setAttribute('aria-pressed', x === b);
+  fly(hotMap, ...VIEWS[b.dataset.view]);
+};
+
+/* ---------- 실시간: 이벤트 폴링 ---------- */
+const seen = new Set();
+let first = true;
+const zoneOf = e => zones.filter(z => dist(e.latitude, e.longitude, z.latitude, z.longitude) <= z.radius).sort((a, b) => b.riskScore - a.riskScore)[0];
+function ripple(e) {
+  if (reduced) return;
+  const c = L.circle([e.latitude, e.longitude], { radius: 40, color: LEVEL[e.alertLevel], weight: 2, fillOpacity: .15, interactive: false }).addTo(demoEvents);
+  const start = performance.now();
+  (function frame(t) {
+    const k = Math.min(1, (t - start) / 1400);
+    c.setRadius(40 + k * 360);
+    c.setStyle({ opacity: 1 - k, fillOpacity: .15 * (1 - k) });
+    k < 1 ? requestAnimationFrame(frame) : c.remove();
+  })(start);
+}
+let phoneTimer;
+function alertPhone(e) {
+  const phone = $('phone');
+  phone.className = `phone ${e.alertLevel}`;
+  $('ph-state').textContent = `${e.alertLevel} · ${e.startedAt.slice(11, 19)}`;
+  $('ph-title').textContent = `${e.minEstimatedDistance}m 앞 차량 접근`;
+  $('ph-text').textContent = e.alertLevel === 'DANGER' ? '멈춰서 주변을 확인하세요.' : '주변을 살피며 이동하세요.';
+  showSummary([e.latitude, e.longitude]);
+  // 화면과 진동을 같은 순간에
+  if (!reduced) phone.animate([0, -5, 5, -4, 4, -2, 0].map(x => ({ transform: `translateX(${x}px)` })), { duration: 420, easing: 'linear' });
+  navigator.vibrate?.(e.alertLevel === 'DANGER' ? [120, 60, 120, 60, 200] : [120]);
+  clearTimeout(phoneTimer);
+  phoneTimer = setTimeout(() => { phone.className = 'phone'; $('ph-state').textContent = '대기 중'; }, 6000);
+}
+async function poll() {
+  if (document.hidden) return;
+  let page;
+  try { page = await api('/api/v1/proximity-events?size=30&sort=startedAt,desc', undefined, true); } catch { return; }
+  const fresh = page.content.filter(e => !seen.has(e.eventId));
+  if (!fresh.length && !first) return;
+  fresh.forEach(e => seen.add(e.eventId));
+  $('st-events').textContent = `접근 이벤트 ${fmt(page.totalElements)}건`;
+  $('k-total').textContent = fmt(page.totalElements);
+  $('feed').insertAdjacentHTML('afterbegin', fresh.map(e => {
+    const z = zoneOf(e);
+    return `<li><b>${esc(z ? shortName(z.name) : '사고다발지역 밖')}</b><small>${e.startedAt.slice(5, 16).replace('T', ' ')} · ${e.minEstimatedDistance}m</small><span class="lv"><i style="background:${LEVEL[e.alertLevel]}"></i>${e.alertLevel}</span></li>`;
+  }).join(''));
+  while ($('feed').children.length > 30) $('feed').lastElementChild.remove();
+  for (const e of fresh) {
+    L.circleMarker([e.latitude, e.longitude], { radius: 4.5, color: '#fff', weight: 1, fillColor: LEVEL[e.alertLevel], fillOpacity: 1 }).bindTooltip(`${e.startedAt.slice(11, 16)} · ${e.alertLevel} · ${e.minEstimatedDistance}m`).addTo(demoEvents);
+  }
+  if (!first && fresh.length) { ripple(fresh[0]); alertPhone(fresh[0]); logLine('백엔드 → 브라우저', `새 접근 이벤트 #${fresh[0].eventId} ${fresh[0].alertLevel}`, `${fresh[0].minEstimatedDistance}m`); }
+  first = false;
+  api('/api/v1/proximity-events?alertLevel=DANGER&size=1', undefined, true).then(r => { $('k-danger').textContent = fmt(r.totalElements); }).catch(() => {});
+  api('/api/bursts', undefined, true).then(r => { $('k-burst').textContent = r.bursts.length; }).catch(() => {});
+}
+
+// 위험도 상위 구역을 돌아가며. 같은 곳에 세 번씩 보내 세 번 누르면 동시 다발로 잡힘
+let presses = 0;
+$('fire').onclick = async () => {
+  const near = zones.filter(z => dist(CENTER[0], CENTER[1], z.latitude, z.longitude) < 6000).sort((a, b) => b.riskScore - a.riskScore);
+  const z = gps ? { latitude: here[0], longitude: here[1] } : near[Math.floor(presses++ / 3) % Math.max(1, Math.min(3, near.length))];
+  if (!z) return;
+  const d = +(1.5 + Math.random() * 7.5).toFixed(1), now = Date.now();
+  try {
+    await api('/api/v1/proximity-events', {
+      deviceId: DEVICE, latitude: +(z.latitude + (Math.random() - .5) * .0008).toFixed(6), longitude: +(z.longitude + (Math.random() - .5) * .0008).toFixed(6),
+      maxRssi: Math.round(-45 - 24 * Math.log10(d)), minEstimatedDistance: d, alertLevel: d <= 3 ? 'DANGER' : 'CAUTION',
+      consecutiveCount: 2 + Math.floor(Math.random() * 5), vibrationTriggered: true, startedAt: kst(now - 8000), endedAt: kst(now),
+    });
+    poll();
+  } catch (err) {
+    $('ph-state').textContent = '저장 실패';
+    $('ph-text').textContent = err.message;
+  }
+};
+
+/* ---------- 데이터셋의 활용성: 가상의 내비게이션 ---------- */
+// 경로는 OSM 도로를 따르는 예시 1개. 위치마다 실제 백엔드를 조회해 경로 앞 사고다발지역을 경고
+const NAV_ROUTE = [[37.4445,127.13465],[37.4442,127.13466],[37.44434,127.13514],[37.44381,127.13538],[37.44359,127.13549],[37.44329,127.13563],[37.44295,127.13578],[37.44269,127.13591],[37.44262,127.13593],[37.44224,127.13612],[37.44196,127.13517],[37.44146,127.13357],[37.4412,127.13267],[37.44095,127.13179],[37.44094,127.13177],[37.44089,127.13179],[37.44047,127.13199],[37.44025,127.13127],[37.44,127.13042],[37.44043,127.13022],[37.44048,127.13019],[37.44001,127.12863],[37.43992,127.12833],[37.43986,127.12813],[37.43977,127.12785],[37.43975,127.12769],[37.43968,127.12771],[37.43931,127.12776],[37.43918,127.12779],[37.43891,127.12784],[37.43833,127.12794],[37.43775,127.12804],[37.43703,127.12818],[37.43649,127.12827],[37.4364,127.12829],[37.43509,127.12852],[37.43421,127.12869],[37.43395,127.12874],[37.43383,127.12876],[37.43379,127.12877],[37.43374,127.12877],[37.43363,127.12879],[37.43342,127.12882],[37.43327,127.12887],[37.43298,127.12892],[37.43282,127.12894],[37.4326,127.12896],[37.43229,127.12901],[37.43149,127.12911],[37.43051,127.12924],[37.43005,127.12931],[37.42984,127.12927],[37.42951,127.12931],[37.4293,127.12934],[37.42921,127.12935],[37.4288,127.12933],[37.42792,127.12924],[37.42743,127.12917],[37.4271,127.12913],[37.42576,127.12891],[37.42573,127.12873],[37.42573,127.12867],[37.42571,127.12858],[37.42573,127.12827]];
+const NAV_TURNS = [[34,"↰","탄리로95번길"],[79,"↱","탄리로"],[328,"↱","수정로"],[737,"↰","제일로"],[796,"↱","제일로157번길"],[945,"↱","수정로88번길"],[995,"↰","수정로"],[1224,"↰","성남대로"]]; // [출발부터 거리(m), 방향, 도로 이름]
+const NAV_LOOK = 300; // 경로 앞 몇 m 까지 경고할지
+const NAV_V = 70, NAV_V_ALERT = 34; // 재생 속도(m/s). 화면 속도는 이 값의 0.6배로 표시
+const navMap = baseMap('navmap', NAV_ROUTE[0], 16, false);
+navMap.dragging.disable();
+// 10m 간격 점으로 펴서 진행 거리 → 좌표, 경로와 구역의 거리를 쉽게 계산
+const navTrack = [];
+{
+  let total = 0;
+  NAV_ROUTE.forEach((p, i) => {
+    if (i) {
+      const [a, len] = [NAV_ROUTE[i - 1], dist(NAV_ROUTE[i - 1][0], NAV_ROUTE[i - 1][1], p[0], p[1])];
+      for (let d = 10; d < len; d += 10) navTrack.push({ lat: a[0] + (p[0] - a[0]) * d / len, lng: a[1] + (p[1] - a[1]) * d / len, s: total + d });
+      total += len;
+    }
+    navTrack.push({ lat: p[0], lng: p[1], s: total });
+  });
+}
+const navTotal = navTrack.at(-1).s;
+L.polyline(NAV_ROUTE, { color: '#4a90ee', weight: 9, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(navMap);
+const navDone = L.polyline([], { color: '#636366', weight: 9, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(navMap);
+const navZones = L.layerGroup().addTo(navMap), navDots = L.layerGroup().addTo(navMap);
+const navCar = L.marker(NAV_ROUTE[0], { interactive: false, zIndexOffset: 1000, icon: L.divIcon({ className: '', iconSize: [44, 44], html: '<div class="car"><svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#fff"/><path id="car-arrow" d="M20 7L30 31L20 26L10 31Z" fill="#1c69d4"/></svg></div>' }) }).addTo(navMap);
+const navDrawn = new Set(), navSeen = new Set();
+let navS = 0, navSpeed = NAV_V, navPaused = false, navLoop = false, navLast = 0, navDraw = 0, navTickAt = 0, navAlert = null, navNear = [], navEvents = [], navHold = 0, navBusy = false;
+function navPoint(s) {
+  const i = Math.min(navTrack.length - 1, navTrack.findIndex(p => p.s >= s) + (s >= navTotal ? navTrack.length : 0));
+  return [navTrack[Math.max(0, i)], navTrack[Math.max(0, i - 1)], navTrack[Math.min(navTrack.length - 1, i + 1)], Math.max(0, i)];
+}
+// 경로 앞에서 처음으로 구역에 닿는 지점. 없으면 null
+function navHit(z, s) {
+  for (const p of navTrack) {
+    if (p.s < s - z.radius || p.s > s + NAV_LOOK) continue;
+    if (dist(p.lat, p.lng, z.latitude, z.longitude) <= z.radius + 40) return p.s;
+  }
+  return null;
+}
+async function navTick() {
+  if (navBusy || document.hidden) return;
+  navBusy = true;
+  const [p] = navPoint(navS), where = `latitude=${p.lat.toFixed(5)}&longitude=${p.lng.toFixed(5)}&radius=600`, started = performance.now();
+  try {
+    const [near, map] = await Promise.all([api(`/api/v1/risk-zones?${where}`, undefined, true), api(`/api/v1/map?${where}`, undefined, true)]);
+    navNear = near.riskZones; navEvents = map.recentEvents;
+    $('n-dot').className = 'dot on';
+    $('n-api').lastChild.textContent = `GET /api/v1/risk-zones 200 · ${Math.round(performance.now() - started)}ms · 주변 ${navNear.length}곳`;
+    for (const z of navNear) {
+      if (navDrawn.has(z.riskZoneId)) continue;
+      navDrawn.add(z.riskZoneId);
+      L.circle([z.latitude, z.longitude], { radius: z.radius, weight: 2, color: riskColor(z.riskScore), fillColor: riskColor(z.riskScore), fillOpacity: .35, interactive: false }).addTo(navZones);
+    }
+    for (const e of navEvents) {
+      if (navSeen.has(e.eventId)) continue;
+      navSeen.add(e.eventId);
+      L.circleMarker([e.latitude, e.longitude], { radius: 4, color: '#fff', weight: 1, fillColor: LEVEL[e.alertLevel], fillOpacity: 1, interactive: false }).addTo(navDots);
+    }
+    // 낮은 단계는 지도에만 표시: 경고가 잦으면 운전자가 무시하게 됨
+    const next = navNear.filter(z => z.riskLevel !== 'LOW').map(z => ({ z, at: navHit(z, navS) })).filter(c => c.at !== null).sort((a, b) => a.at - b.at)[0];
+    if (next && next.z.riskZoneId !== navAlert?.z.riskZoneId) {
+      navAlert = next;
+      logLine('백엔드 → 내비게이션', `사고다발지역 경고: ${shortName(next.z.name)}`, `${next.z.riskLevel} ${next.z.riskScore}점`);
+    }
+    if (navAlert) navAlert.count = navEvents.filter(e => dist(e.latitude, e.longitude, navAlert.z.latitude, navAlert.z.longitude) <= navAlert.z.radius + 100).length;
+  } catch {
+    $('n-dot').className = 'dot off';
+    $('n-api').lastChild.textContent = '백엔드 연결 실패';
+  } finally {
+    navBusy = false;
+  }
+}
+function navRender(p, prev, nextP) {
+  navMap.setView([p.lat, p.lng], 16, { animate: false });
+  navCar.setLatLng([p.lat, p.lng]);
+  const heading = Math.atan2((nextP.lng - prev.lng) * Math.cos(p.lat * Math.PI / 180), nextP.lat - prev.lat) * 180 / Math.PI;
+  document.getElementById('car-arrow')?.setAttribute('transform', `rotate(${heading} 20 20)`);
+  navDone.setLatLngs(navTrack.filter(t => t.s <= navS).map(t => [t.lat, t.lng]));
+  $('n-speed').textContent = Math.round(navSpeed * .6);
+  $('n-left').textContent = `남은 거리 ${((navTotal - navS) / 1000).toFixed(1)}km`;
+  const turn = NAV_TURNS.find(t => t[0] > navS);
+  $('n-icon').textContent = turn ? turn[1] : '⚑';
+  $('n-dist').textContent = turn ? `${Math.max(10, Math.round((turn[0] - navS) / 10) * 10)}m` : `${Math.round(navTotal - navS)}m`;
+  $('n-road').textContent = turn ? turn[2] : '목적지';
+  const box = $('n-alert');
+  if (navAlert && navS > navAlert.at + navAlert.z.radius + 60) navAlert = null;
+  box.classList.toggle('on', !!navAlert);
+  if (!navAlert) return;
+  const { z, at, count = 0 } = navAlert, d = details[z.name], ahead = at - navS;
+  box.classList.toggle('HIGH', z.riskLevel === 'HIGH');
+  $('na-dist').textContent = ahead > 0 ? `${Math.round(ahead / 10) * 10}m 앞` : '구간 통과 중';
+  $('na-name').textContent = z.name.match(/\((.+?)(?: 부근)?\)/)?.[1] ?? shortName(z.name);
+  $('na-info').textContent = `${d ? d.types.map(t => LABEL[t] ?? t).join('·') + ' · ' : ''}사고 ${z.accidentCount}건 · 위험도 ${z.riskScore}점(${z.riskLevel})`;
+  $('na-live').textContent = `최근 24시간 보행자 접근 감지 ${count}건`;
+  $('na-act').textContent = z.riskLevel === 'HIGH' ? '속도를 줄이고 보행자를 살피세요' : '주의해서 서행하세요';
+}
+function navFrame(t) {
+  if (slides[current].id !== 'navi' || navPaused) { navLoop = false; return; }
+  requestAnimationFrame(navFrame);
+  const dt = Math.min(.25, (t - navLast) / 1000);
+  navLast = t;
+  if (navHold) { if (t > navHold) { navHold = 0; navS = 0; navAlert = null; navTick(); } return; }
+  const target = navAlert ? NAV_V_ALERT : NAV_V;
+  navSpeed += (target - navSpeed) * Math.min(1, dt * 2);
+  navS = Math.min(navTotal, navS + navSpeed * dt);
+  if (t - navTickAt > 1200) { navTickAt = t; navTick(); }
+  if (t - navDraw > (reduced ? 1000 : 50)) { navDraw = t; const [p, a, b] = navPoint(navS); navRender(p, a, b); }
+  if (navS >= navTotal) navHold = t + 2500;
+}
+function navStart() {
+  if (navLoop || navPaused) return;
+  navLoop = true; navLast = performance.now();
+  requestAnimationFrame(navFrame);
+}
+$('nav-toggle').onclick = () => {
+  navPaused = !navPaused;
+  $('nav-toggle').textContent = navPaused ? '다시 재생' : '일시정지';
+  if (!navPaused) navStart();
+};
+
+/* ---------- 연결 상태 ---------- */
+async function status() {
+  try {
+    const s = await api('/api/status', undefined, true);
+    $('st-backend').className = `dot ${s.backend.ok ? 'on' : 'off'}`;
+    $('st-llm').className = `dot ${s.llm.ok ? 'on' : 'off'}`;
+    $('st-backend-t').textContent = s.backend.ok ? `백엔드 ${s.backend.ms}ms` : '백엔드 끊김';
+  } catch {
+    $('st-backend').className = $('st-llm').className = 'dot off';
+    $('st-backend-t').textContent = '서버 끊김';
+  }
+}
+status();
+setInterval(status, 10000);
+
+/* ---------- 채팅 ---------- */
+const QUESTIONS = ['모란시장 위험해?', '내 주변 위험해?', '방금 감지된 거 위험해?', '진동이 울리면 어떻게 해야 해?']; // 답을 확인한 질문만
+const turns = [];
+let busy = false;
+$('chips').innerHTML = QUESTIONS.map(q => `<button type="button">${esc(q)}</button>`).join('');
+const setBusy = v => { busy = v; $('send').disabled = v; for (const b of $('chips').children) b.disabled = v; };
+function bubble(cls, text) {
+  const el = document.createElement('div');
+  el.className = `bubble ${cls}`;
+  el.textContent = text;
+  $('msgs').append(el);
+  $('msgs').scrollTop = $('msgs').scrollHeight;
+  return el;
+}
+const atBottom = () => { const m = $('msgs'); return m.scrollHeight - m.scrollTop - m.clientHeight < 60; };
+async function ask(question) {
+  if (busy || !question.trim()) return;
+  setBusy(true);
+  bubble('user', question);
+  turns.push({ role: 'user', content: question });
+  const bot = bubble('bot wait', '백엔드에서 최신 데이터를 읽는 중');
+  const started = performance.now();
+  const seconds = () => ((performance.now() - started) / 1000).toFixed(1);
+  let tick;
+  try {
+    logLine('브라우저 → AI 서비스', 'POST /api/chat');
+    const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: turns.slice(-6), latitude: here[0], longitude: here[1], trace: true }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `${res.status}`);
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let head = '', text = '', traced = false, answering = false;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!traced) { // 첫 줄은 AI 서비스의 통신 기록
+        head += value;
+        const nl = head.indexOf('\n');
+        if (nl < 0) continue;
+        const trace = JSON.parse(head.slice(0, nl));
+        for (const c of trace.calls) logLine('AI 서비스 → 백엔드', `${c.method} ${c.path}${c.note ? ` (${c.note})` : ''}`, `${c.status} · ${c.ms}ms`);
+        $('context').textContent = trace.facts;
+        logLine('AI 서비스 → AI 모델', `POST /v1/chat/completions (${trace.model})`, '대기');
+        tick = setInterval(() => { bot.textContent = `AI 모델이 답을 준비하는 중 · ${Math.round(seconds())}초`; }, 500);
+        traced = true;
+        text = head.slice(nl + 1);
+        if (!text) continue;
+      } else text += value;
+      if (!answering) { answering = true; clearInterval(tick); bot.classList.remove('wait'); logLine('AI 모델 → 브라우저', '첫 응답', `${seconds()}s`); }
+      const follow = atBottom();
+      bot.innerHTML = DOMPurify.sanitize(marked.parse(text));
+      if (follow) $('msgs').scrollTop = $('msgs').scrollHeight;
+    }
+    clearInterval(tick);
+    if (!text) throw new Error('모델이 답하지 않았습니다');
+    logLine('AI 모델 → 브라우저', `답변 완료 (${text.length}자)`, `${seconds()}s`);
+    turns.push({ role: 'assistant', content: text });
+  } catch (err) {
+    clearInterval(tick);
+    logLine('AI 서비스 → 브라우저', err.message, '실패', true);
+    bot.classList.remove('wait');
+    bot.textContent = `답변을 받지 못했습니다: ${err.message}`;
+    turns.pop();
+  } finally {
+    setBusy(false);
+  }
+}
+$('chips').onclick = e => { const b = e.target.closest('button'); if (b) ask(b.textContent); };
+$('ask').onsubmit = e => { e.preventDefault(); if (busy) return; const q = $('q').value; $('q').value = ''; ask(q); };
+
+slides.forEach(s => observer.observe(s));
+if (location.hash && $(location.hash.slice(1))) { deck.style.scrollBehavior = 'auto'; $(location.hash.slice(1)).scrollIntoView(); deck.style.scrollBehavior = ''; }
+loadAccidents().catch(() => {});
+loadZones()
+  .catch(() => { $('hot-count').textContent = '–'; $('zone-card').innerHTML = '<p class="small">백엔드에서 위험구역을 읽지 못했습니다.</p>'; })
+  .finally(() => { poll(); setInterval(poll, 2000); });
+</script>
+</body>
+</html>
