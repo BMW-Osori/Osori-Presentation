@@ -103,6 +103,12 @@ assert "내 위치 1000m 안 위험구역: 0곳" in text and "내 위치 1000m �
 assert "내 위치" not in server.facts("지금 위험해?", zones, events), "위치를 모르면 위치 줄을 넣지 않음"
 assert "내 위치 1000m 안 위험구역: 1곳" in server.facts("지금 위험해?", zones, events, (37.4301, 127.13))
 assert "질문에 나온 감지 구역: 없음" in server.facts("안녕", zones, events), "없는 구역을 지어내지 않게 명시"
+text = server.facts("최근 마지막 데이터 알려줘", zones, events + [far])
+assert "- 가장 최근 감지: 11-07 08:40 구역 밖 · 거리 11.0m · RSSI -59dBm · 연속 3회 · DANGER\n- 전체" in text, text
+assert "- 가장 최근 감지: 11-07 08:09 경기도 성남시 중원구 성남동(모란시장사거리 부근) · 거리 5.0m" in server.facts("마지막 감지 기록", zones, events)
+assert "최근 감지" not in server.facts("모란시장 최근 기록 알려줘", zones, events), "구역을 물으면 그 구역 기록으로"
+assert "최근 감지" not in server.facts("내 주변 최근 감지 있어?", zones, events, (37.4301, 127.13)), "주변을 물으면 내 위치 기록으로"
+assert "가장 최근 감지: 없음" in server.facts("최근 데이터 알려줘", zones, [])
 assert server.here_of("x", 1) is None and server.here_of(None, None) is None and server.here_of(99, 1) is None and server.here_of("37.4", "127.1") == (37.4, 127.1)
 
 assert post_chat({"messages": [{"role": "user", "content": "내 주변 위험해?"}], "latitude": 37.43, "longitude": 127.13}) == "안녕"

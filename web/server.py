@@ -35,6 +35,7 @@ KOREA = "latitude=36.5&longitude=127.8&radius=1000000"  # 전국 위험구역 �
 SCAN_EVENTS = 200
 NEAR_WORDS = r"주변|근처|여기|내 위치|현재 위치|지금 위치|이 근방|방금|^(지금 )?위험해"  # 현재 위치를 묻는 질문
 FOLLOW_WORDS = r"거기|그곳|그 구역|그 지역|그 동네|그쪽"  # 앞 질문의 구역을 가리키는 후속 질문
+RECENT_WORDS = r"최근|마지막|최신"  # 가장 최근 감지를 묻는 질문
 _details = {}  # 이벤트 상세. 목록 API 에 RSSI·연속 횟수가 없어 건별로 읽음. 이벤트는 바뀌지 않으므로 보관
 
 
@@ -168,6 +169,7 @@ def facts(question: str, zones: list, events: list, here=None) -> str:
     burst = bursts(zones, events)
     picked = match_zones(question, zones)
     asks_near = here and not picked and re.search(NEAR_WORDS, question)
+    asks_recent = not picked and not asks_near and re.search(RECENT_WORDS, question)
     if asks_near:
         near = sorted((z for z in zones if abs(z["latitude"] - here[0]) < .02), key=lambda z: distance_m(*here, z["latitude"], z["longitude"]))
         picked = sorted([z for z in near if distance_m(*here, z["latitude"], z["longitude"]) <= NEAR_M][:3], key=lambda z: -z["riskScore"])  # 모델은 첫 줄을 가장 위험한 곳으로 읽음
@@ -178,6 +180,12 @@ def facts(question: str, zones: list, events: list, here=None) -> str:
         close = [e for e in events if distance_m(*here, e["latitude"], e["longitude"]) <= NEAR_M]
         lines.append(f"- 내 위치 {NEAR_M}m 안 감지: {len(close)}건")
         lines += [f"  - {hhmm(e['startedAt'])} 거리 {e['minEstimatedDistance']}m · RSSI {e['maxRssi']}dBm · 연속 {e['consecutiveCount']}회 · {e['alertLevel']}" for e in close[-5:]]
+    elif asks_recent:  # 요약 줄에는 감지 날짜·위치가 없어 모델이 데이터 기준 시각이나 앞 구역을 마지막 감지로 씀
+        # 한 건만: 여러 줄이면 구역 순서가 같은 동시 다발 줄과 헷갈려 그쪽 시각을 옮김
+        zone_of = {e["eventId"]: name for name, es in grouped.items() for e in es}
+        e = events[-1] if events else None
+        lines.append(f"- 가장 최근 감지: {e['startedAt'][5:10]} {hhmm(e['startedAt'])} {zone_of.get(e['eventId'], '구역 밖')} · 거리 {e['minEstimatedDistance']}m · "
+                     f"RSSI {e['maxRssi']}dBm · 연속 {e['consecutiveCount']}회 · {e['alertLevel']}" if e else "- 가장 최근 감지: 없음")
     elif not lines:  # 모델이 없는 구역의 수치를 전체 요약에서 지어내지 않도록 명시
         lines.append("- 질문에 나온 감지 구역: 없음")
     alerts = Counter(e["alertLevel"] for e in events)
