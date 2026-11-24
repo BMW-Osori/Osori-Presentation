@@ -34,6 +34,7 @@ NEAR_M = 1000  # 채팅에서 "내 주변"으로 보는 거리
 KOREA = "latitude=36.5&longitude=127.8&radius=1000000"  # 전국 위험구역 조회 (백엔드 조회 API 에 반경이 필수)
 SCAN_EVENTS = 200
 NEAR_WORDS = r"주변|근처|여기|내 위치|현재 위치|지금 위치|이 근방|방금|^(지금 )?위험해"  # 현재 위치를 묻는 질문
+FOLLOW_WORDS = r"거기|그곳|그 구역|그 지역|그 동네|그쪽"  # 앞 질문의 구역을 가리키는 후속 질문
 _details = {}  # 이벤트 상세. 목록 API 에 RSSI·연속 횟수가 없어 건별로 읽음. 이벤트는 바뀌지 않으므로 보관
 
 
@@ -198,7 +199,11 @@ def facts(question: str, zones: list, events: list, here=None) -> str:
 
 def context_for(messages: list, here=None, calls=None) -> str:
     """질문마다 백엔드를 새로 읽어 모델에 줄 참고 데이터를 만듦."""
-    question = " ".join(m["content"] for m in messages[-3:] if m["role"] == "user")  # 후속 질문도 앞 구역을 이어받게
+    asked = [m["content"] for m in messages if m["role"] == "user"]
+    question = asked[-1]
+    # 앞 질문의 구역은 "거기 사고 유형은?"처럼 가리킬 때만 이어받음: 늘 섞으면 "최근 데이터" 같은 질문에도 앞 구역이 붙음
+    if len(asked) > 1 and re.search(FOLLOW_WORDS, question):
+        question = f"{asked[-2]} {question}"
     zones, events = load_data(calls)
     return facts(question, zones, events, here)
 
@@ -207,7 +212,8 @@ def chat(messages: list, context: str):
     """모델에 연결하고 답변 조각을 받는 대로 내는 제너레이터를 반환. 연결 실패는 호출 시점에 예외."""
     body = {
         "model": CHAT_MODEL,
-        "messages": [{"role": "system", "content": f"{CHAT_SYSTEM}\n\n{context}"}, *messages],
+        # 마지막 질문만: 튜닝이 한 턴 형식이라 이전 답을 주면 새 참고 데이터 대신 이전 답을 베낌. 앞 구역은 context 로 이어받음
+        "messages": [{"role": "system", "content": f"{CHAT_SYSTEM}\n\n{context}"}, messages[-1]],
         "adapters": CHAT_ADAPTERS,  # Ollama 는 무시 (튜닝 결과가 모델에 합쳐져 있음)
         "max_tokens": 900,  # 노션 형식 답변(최장 약 660토큰)은 담고, CPU 8토큰/초에서 120초 안에 끝나는 상한
         "repetition_penalty": 1.1,  # 같은 구절 반복 루프 방지
@@ -330,8 +336,8 @@ class Handler(BaseHTTPRequestHandler):
             arg = [{"role": m["role"], "content": m["content"]} for m in data["messages"][-10:]]
             if any(m["role"] not in ("user", "assistant") or not isinstance(m["content"], str) for m in arg):
                 raise ValueError("bad message")
-            if not arg:
-                raise ValueError("empty")
+            if not arg or arg[-1]["role"] != "user":
+                raise ValueError("no question")
         except (ValueError, TypeError, KeyError):
             return self.send(400, {"error": '요청 형식이 올바르지 않습니다. {"messages": [{"role": "user", "content": "..."}]}'})
         calls = []

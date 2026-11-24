@@ -108,6 +108,11 @@ assert server.here_of("x", 1) is None and server.here_of(None, None) is None and
 assert post_chat({"messages": [{"role": "user", "content": "내 주변 위험해?"}], "latitude": 37.43, "longitude": 127.13}) == "안녕"
 system = prompts[-1]["messages"][0]["content"]
 assert "모란시장사거리 부근): 위험도 90.0점" in system, "채팅에 백엔드 실시간 데이터와 현재 위치가 반영됨"
+before = [{"role": "user", "content": "역삼역 위험해?"}, {"role": "assistant", "content": "## 📍 서울특별시 강남구 역삼동(역삼역 부근) 위험도 리포트"}]
+assert "역삼역" not in server.context_for(before + [{"role": "user", "content": "최근 마지막 데이터 알려줘"}]), "가리키지 않으면 앞 구역을 섞지 않음"
+assert "역삼역 부근): 위험도 50.0점" in server.context_for(before + [{"role": "user", "content": "거기 사고 유형은?"}]), "거기는 앞 구역을 이어받음"
+post_chat({"messages": before + [{"role": "user", "content": "최근 마지막 데이터 알려줘"}]})
+assert [m["role"] for m in prompts[-1]["messages"]] == ["system", "user"] and prompts[-1]["messages"][1]["content"] == "최근 마지막 데이터 알려줘", "모델에는 이전 답 없이 마지막 질문만"
 EVENTS.append(event(4, 30))
 post_chat({"messages": [{"role": "user", "content": "모란시장"}]})
 assert "감지 4건" in prompts[-1]["messages"][0]["content"], "방금 들어온 이벤트가 바로 채팅에 반영"
