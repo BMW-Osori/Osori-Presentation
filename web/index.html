@@ -147,7 +147,6 @@
   .demo-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px 28px; flex-wrap: wrap; }
   .demo-head .title { font-size: clamp(26px, 3.5vw, 52px); }
   .where { display: grid; gap: 5px; justify-items: end; width: min(300px, 100%); }
-  .where .seg { width: 100%; }
   .where .small { text-align: right; }
   #demomap { border-radius: 22px; min-height: 240px; z-index: 0; }
   .panel { background: var(--surface); border-radius: 22px; padding: 16px; display: flex; flex-direction: column; min-height: 0; }
@@ -434,8 +433,7 @@
         <h2 class="title">버튼을 누르면 실제 백엔드에 저장됩니다.</h2>
       </div>
       <div class="where">
-        <div class="seg" id="where" role="group" aria-label="시연 위치"><button data-where="demo" aria-pressed="true">모란시장</button><button data-where="gps" aria-pressed="false">내 위치</button></div>
-        <p class="small" id="where-note" aria-live="polite">앱의 테스트 경고도 여기에 바로 나타납니다</p>
+        <p class="small" id="where-note" aria-live="polite">현재 위치를 확인하는 중</p>
       </div>
     </div>
     <div class="demo">
@@ -543,7 +541,7 @@ const RAMP = [[0, '#fde4d8'], [35, '#f4a07e'], [70, '#e0492f'], [100, '#c9302c']
 const DEVICE = 1; // deploy/seed_backend.py 가 만드는 시연 디바이스
 const CENTER = [37.4301, 127.1300]; // 기본 시연 위치: 성남 모란시장
 const NEAR_M = 1000; // 주변으로 보는 거리 (server.py NEAR_M 과 같음)
-let here = CENTER, gps = false; // 시연 위치. '내 위치'를 누르면 브라우저 위치로 바뀌고 이벤트·채팅·안전 요약이 모두 따라감
+let here = CENTER, gps = false; // 시연 위치. 시작할 때 브라우저 위치를 묻고, 허용하면 이벤트·채팅·안전 요약이 모두 그 위치를 따라감
 const VIEWS = { korea: [[36.3, 127.9], 7], seoul: [[37.55, 127.0], 11], seongnam: [[37.42, 127.13], 12] };
 
 // 백엔드 응답은 {success, code, message, data}, AI 서비스는 그대로
@@ -696,30 +694,21 @@ async function showSummary([latitude, longitude]) {
     $('ph-zone').textContent = '주변 사고다발지역을 읽지 못했습니다.';
   }
 }
-async function setWhere(point, isGps) {
-  here = point; gps = isGps; presses = 0;
-  for (const b of $('where').children) b.setAttribute('aria-pressed', (b.dataset.where === 'gps') === isGps);
-  youLayer.clearLayers();
-  if (isGps) {
-    L.circle(point, { radius: NEAR_M, color: '#4a90ee', weight: 1.5, opacity: .7, fillOpacity: .06, interactive: false }).addTo(youLayer);
-    L.circleMarker(point, { radius: 7, color: '#fff', weight: 3, fillColor: '#4a90ee', fillOpacity: 1 }).bindTooltip('내 위치').addTo(youLayer);
-  }
+async function setWhere(point) {
+  here = point; gps = true;
+  L.circle(point, { radius: NEAR_M, color: '#4a90ee', weight: 1.5, opacity: .7, fillOpacity: .06, interactive: false }).addTo(youLayer);
+  L.circleMarker(point, { radius: 7, color: '#fff', weight: 3, fillColor: '#4a90ee', fillOpacity: 1 }).bindTooltip('내 위치').addTo(youLayer);
   fly(demoMap, point, 14);
   drawDemoZones();
   const s = await showSummary(point);
-  $('where-note').textContent = isGps ? `내 위치 기준 · 주변 1km ${s?.nearbyRiskZoneCount ?? 0}곳 · 시뮬레이션하면 이 위치가 저장됩니다` : '앱의 테스트 경고도 여기에 바로 나타납니다';
+  $('where-note').textContent = `내 위치 기준 · 주변 1km ${s?.nearbyRiskZoneCount ?? 0}곳 · 시뮬레이션하면 이 위치가 저장됩니다`;
 }
-$('where').onclick = e => {
-  const b = e.target.closest('button');
-  if (!b) return;
-  if (b.dataset.where === 'demo') return setWhere(CENTER, false);
-  if (!navigator.geolocation) { $('where-note').textContent = '이 브라우저는 위치를 지원하지 않습니다'; return; }
-  $('where-note').textContent = '위치를 확인하는 중';
-  navigator.geolocation.getCurrentPosition(
-    p => setWhere([p.coords.latitude, p.coords.longitude], true),
-    err => { $('where-note').textContent = err.code === err.PERMISSION_DENIED ? '위치 권한이 없어 모란시장 기준으로 시연합니다' : '위치를 확인하지 못해 모란시장 기준으로 시연합니다'; },
-    { timeout: 8000, maximumAge: 30000, enableHighAccuracy: true });
-};
+// 페이지를 열 때마다 위치를 요청. 거절·실패하면 모란시장(CENTER) 그대로. 콜백은 비동기라 아래 let 들이 먼저 초기화됨
+if (!navigator.geolocation) $('where-note').textContent = '이 브라우저는 위치를 지원하지 않아 모란시장 기준으로 시연합니다';
+else navigator.geolocation.getCurrentPosition(
+  p => setWhere([p.coords.latitude, p.coords.longitude]),
+  err => { $('where-note').textContent = err.code === err.PERMISSION_DENIED ? '위치 권한이 없어 모란시장 기준으로 시연합니다' : '위치를 확인하지 못해 모란시장 기준으로 시연합니다'; },
+  { timeout: 8000, maximumAge: 30000, enableHighAccuracy: true });
 $('hot-views').onclick = e => {
   const b = e.target.closest('button');
   if (!b) return;
