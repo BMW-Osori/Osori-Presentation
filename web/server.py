@@ -3,7 +3,10 @@
 import contextlib
 import json
 import os
+import queue
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -22,6 +25,7 @@ ROOT = Path(__file__).parent
 KOREA = "latitude=36.5&longitude=127.8&radius=1000000"  # 전국 위험구역 조회 (백엔드 조회 API 에 반경이 필수)
 SCAN_EVENTS = 200
 FOLLOW_WORDS = r"거기|그곳|그 구역|그 지역|그 동네|그쪽"  # 앞 질문의 구역을 가리키는 후속 질문
+TYPE_PAUSE, TYPE_MAX_S = .02, 4  # 코드가 쓴 글도 AI 가 쓰듯 0.02초 간격으로 조금씩. 긴 답도 4초 안에 끝나게 한 번에 보내는 글자를 늘림
 _details = {}  # 이벤트 상세. 목록 API 에 RSSI·연속 횟수가 없어 건별로 읽음. 이벤트는 바뀌지 않으므로 보관
 
 
@@ -95,6 +99,27 @@ def analyze(question: str, data: str):
     return pieces()
 
 
+def typed(text: str):
+    """글을 AI 가 쓰듯 조금씩 내는 제너레이터 (최소 5자씩, 길면 TYPE_MAX_S 안에 끝나게)."""
+    step = max(5, -(-len(text) * TYPE_PAUSE // TYPE_MAX_S)) if TYPE_PAUSE else len(text) or 1
+    for i in range(0, len(text), int(step)):
+        yield text[i:i + int(step)]
+        time.sleep(TYPE_PAUSE)
+
+
+def analysis_into(question: str, data: str, out: queue.Queue, stop: threading.Event):
+    """AI 분석 조각을 out 에 넣음 (끝은 None, 실패는 예외). 본문을 쓰는 동안 미리 돌려 모델이 데이터를 읽는 시간을 겹침."""
+    try:
+        with contextlib.closing(analyze(question, data)) as pieces:  # 사용자가 끊으면 모델 생성도 중단
+            for text in pieces:
+                if stop.is_set():
+                    break
+                out.put(text)
+    except Exception as e:
+        out.put(e)
+    out.put(None)
+
+
 def here_of(latitude, longitude):
     """요청의 현재 위치. 없거나 잘못되면 None."""
     try:
@@ -136,24 +161,30 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def send_answer(self, question, reply):
-        """본문은 바로, AI 분석은 받는 대로, 마지막에 출처. 길이를 모르므로 연결 종료가 응답의 끝 (HTTP/1.0)."""
+        """본문 → AI 분석 → 출처를 AI 가 쓰듯 조금씩. AI 분석은 본문을 쓰는 동안 미리 시작.
+        길이를 모르므로 연결 종료가 응답의 끝 (HTTP/1.0)."""
+        pieces, stop = queue.Queue(), threading.Event()
+        if reply.data:
+            threading.Thread(target=analysis_into, args=(question, reply.data, pieces, stop), daemon=True).start()
+
+        def write(text):
+            for piece in typed(text):
+                self.wfile.write(piece.encode())
+
         try:
-            self.wfile.write(reply.body.encode())
+            write(reply.body)
             if reply.data:
-                self.wfile.write("\n\n### 🤖 AI 분석\n\n".encode())
+                write("\n\n### 🤖 AI 분석\n\n")
                 wrote = False
-                try:
-                    with contextlib.closing(analyze(question, reply.data)) as pieces:  # 사용자가 끊으면 모델 생성도 중단
-                        for text in pieces:
-                            self.wfile.write(text.encode())
-                            wrote = True
-                except (BrokenPipeError, ConnectionResetError):
-                    raise
-                except Exception:  # 모델 서버가 꺼졌거나 시간 초과: 코드가 쓴 기준 분석으로 대신
-                    self.wfile.write(("*(분석이 중간에 끊겼습니다.)*" if wrote else reply.reference).encode())
-            self.wfile.write(f"\n\n---\n{reply.note}".encode())
+                while (text := pieces.get()) is not None:
+                    if isinstance(text, Exception):  # 모델 서버가 꺼졌거나 시간 초과: 코드가 쓴 기준 분석으로 대신
+                        write("*(분석이 중간에 끊겼습니다.)*" if wrote else reply.reference)
+                        break
+                    write(text)  # 본문을 쓰는 동안 쌓인 조각도 한꺼번에 내지 않고 같은 속도로
+                    wrote = True
+            write(f"\n\n---\n{reply.note}")
         except (BrokenPipeError, ConnectionResetError):  # 사용자가 끊음: 보낼 곳 없음
-            pass
+            stop.set()
 
     def proxy_backend(self):
         """로컬 개발용: Caddy 없이 한 주소로 Spring Boot 까지. 운영에서는 Caddy 가 /api/v1 을 바로 넘겨 여기 오지 않음."""

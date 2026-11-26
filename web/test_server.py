@@ -66,6 +66,7 @@ def serve(handler):
 
 
 server.BACKEND_URL, server.CHAT_URL, base = serve(FakeBackend), serve(FakeChat), serve(server.Handler)
+server.TYPE_PAUSE = 0  # 타이핑 효과 없이 바로 (아래에서 따로 확인)
 answers.ACCIDENTS = {ZONES[0]["name"]: {"types": ["보행노인"], "casualties": 9, "deaths": 1}}
 
 
@@ -123,6 +124,11 @@ assert r.kind == "event" and r.data.startswith("- 신호: 거리 2.3m(차량이 
 for q, kind in (("진동이 울리면 어떻게 해야 해?", "faq"), ("동시 다발 구역 기준이 뭐야?", "faq"), ("에버랜드 위험해?", "nodata"), ("안녕", "help")):
     r = A.route(q, zones, events)
     assert r.kind == kind and r.data is None, (q, r.kind)
+server.TYPE_PAUSE, server.TYPE_MAX_S = .001, .1
+text = "가나다라마" * 300  # 1500자: 5자씩이면 0.3초라 0.1초 안에 끝나게 15자씩
+parts = list(server.typed(text))
+assert "".join(parts) == text and len(parts) == 100 and len(list(server.typed("짧은 글"))) == 1, "조금씩 보내되 긴 글은 정한 시간 안에 끝나게 묶음"
+server.TYPE_PAUSE, server.TYPE_MAX_S = 0, 4
 assert server.here_of("x", 1) is None and server.here_of(None, None) is None and server.here_of(99, 1) is None and server.here_of("37.4", "127.1") == (37.4, 127.1)
 
 # 채팅: 본문 → AI 분석(모델) → 출처
