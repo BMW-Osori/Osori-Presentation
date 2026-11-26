@@ -32,7 +32,7 @@ fi
 
 rm -rf /opt/safety
 install -d /opt/safety/web
-cp web/server.py web/index.html web/accident_data.json web/sample_data.json /opt/safety/web/
+cp web/server.py web/answers.py web/index.html web/accident_data.json web/sample_data.json /opt/safety/web/
 cp deploy/seed_backend.py deploy/risk-zones.json /opt/safety/
 cp backend/build/libs/osori-0.0.1-SNAPSHOT.jar /opt/safety/backend.jar
 
