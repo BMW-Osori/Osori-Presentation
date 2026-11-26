@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import queue
+import random
 import re
 import threading
 import time
@@ -25,7 +26,7 @@ ROOT = Path(__file__).parent
 KOREA = "latitude=36.5&longitude=127.8&radius=1000000"  # 전국 위험구역 조회 (백엔드 조회 API 에 반경이 필수)
 SCAN_EVENTS = 200
 FOLLOW_WORDS = r"거기|그곳|그 구역|그 지역|그 동네|그쪽"  # 앞 질문의 구역을 가리키는 후속 질문
-TYPE_PAUSE, TYPE_MAX_S = .02, 4  # 코드가 쓴 글도 AI 가 쓰듯 0.02초 간격으로 조금씩. 긴 답도 4초 안에 끝나게 한 번에 보내는 글자를 늘림
+TYPE_CPS, TYPE_MAX_S = 70, 7  # 코드가 쓴 글도 AI 가 쓰듯 초당 약 70자. 긴 답도 7초 안에 끝나게 전체를 빠르게 (0 이면 바로)
 _details = {}  # 이벤트 상세. 목록 API 에 RSSI·연속 횟수가 없어 건별로 읽음. 이벤트는 바뀌지 않으므로 보관
 
 
@@ -100,11 +101,19 @@ def analyze(question: str, data: str):
 
 
 def typed(text: str):
-    """글을 AI 가 쓰듯 조금씩 내는 제너레이터 (최소 5자씩, 길면 TYPE_MAX_S 안에 끝나게)."""
-    step = max(5, -(-len(text) * TYPE_PAUSE // TYPE_MAX_S)) if TYPE_PAUSE else len(text) or 1
-    for i in range(0, len(text), int(step)):
-        yield text[i:i + int(step)]
-        time.sleep(TYPE_PAUSE)
+    """글을 AI 가 쓰듯 내는 제너레이터: 토큰처럼 1~3자씩, 속도는 조금씩 흔들리고 문장 끝·줄·문단에서 잠깐 멈춤.
+    긴 글은 TYPE_MAX_S 안에 끝나게 전체를 같은 비율로 빠르게."""
+    if not TYPE_CPS:
+        yield text
+        return
+    parts = re.findall(r"\s*\S{1,3}|\s+", text)  # 띄어쓰기는 다음 조각 앞에 붙임
+    before = [.25 if p.startswith("\n\n") else .1 if p.startswith("\n") else 0 for p in parts]
+    after = [len(p.strip()) / TYPE_CPS * random.uniform(.6, 1.4) + (.12 if p.rstrip()[-1:] in ".?!" else 0) for p in parts]
+    scale = min(1, TYPE_MAX_S / (sum(before) + sum(after) or 1))
+    for part, b, a in zip(parts, before, after):
+        time.sleep(b * scale)
+        yield part
+        time.sleep(a * scale)
 
 
 def analysis_into(question: str, data: str, out: queue.Queue, stop: threading.Event):
